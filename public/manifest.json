@@ -1,0 +1,23 @@
+{
+  "name": "LifeSignal AI",
+  "short_name": "LifeSignal",
+  "description": "A safety and emergency response application for kids, elderly people, and individuals living alone.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#E3F2FD",
+  "theme_color": "#64B5F6",
+  "icons": [
+    {
+      "src": "/icon-192x192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "/icon-512x512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ]
+}
