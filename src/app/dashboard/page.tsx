@@ -1,4 +1,3 @@
-
 "use client";
 
 import { Header } from "@/components/header";
@@ -86,6 +85,7 @@ export default function DashboardPage() {
                            <SelectValue placeholder="Select interval" />
                        </SelectTrigger>
                        <SelectContent>
+                           <SelectItem value="3">Every 3 hours</SelectItem>
                            <SelectItem value="6">Every 6 hours</SelectItem>
                            <SelectItem value="10">Every 10 hours</SelectItem>
                            <SelectItem value="12">Every 12 hours</SelectItem>

@@ -1,8 +1,9 @@
+// app/signup/page.tsx
 "use client";
 
 import React, { useEffect, useState } from "react";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import * as z from "zod";
@@ -17,7 +18,7 @@ import { Progress } from "@/components/ui/progress";
 import { useToast } from "@/hooks/use-toast";
 
 import { auth, db } from "@/firebase";
-import { createUserWithEmailAndPassword, updateProfile } from "firebase/auth";
+import { createUserWithEmailAndPassword, updateProfile, sendEmailVerification } from "firebase/auth";
 import { doc, serverTimestamp, setDoc } from "firebase/firestore";
 
 const passwordValidation = z
@@ -42,7 +43,13 @@ const signupSchema = z
 
 export default function SignupPage() {
   const router = useRouter();
+  const params = useSearchParams();
   const { toast } = useToast();
+
+  // Read role + next from the URL (defaults)
+  const role = (params.get("role") || "user").toLowerCase(); // "caregiver" | "user"
+  const next = params.get("next") || "/";
+
   const [passwordStrength, setPasswordStrength] = useState(0);
   const [isSubmitting, setIsSubmitting] = useState(false);
 
@@ -71,20 +78,41 @@ export default function SignupPage() {
       // 1) Create auth user
       const cred = await createUserWithEmailAndPassword(auth, values.email, values.password);
 
-      // 2) Set display name in Firebase Auth (optional)
+      // 2) Set display name (optional)
       await updateProfile(cred.user, { displayName: values.name });
 
-      // 3) Create a user profile document in Firestore (optional but common)
-      await setDoc(doc(db, "users", cred.user.uid), {
-        uid: cred.user.uid,
-        name: values.name,
-        email: values.email,
-        createdAt: serverTimestamp(),
-      });
+      // 3) Create/merge Firestore profile and store the role
+      await setDoc(
+        doc(db, "users", cred.user.uid),
+        {
+          uid: cred.user.uid,
+          name: values.name,
+          email: (cred.user.email || "").toLowerCase(),
+          role, // <-- persist role for routing/authorization later
+          createdAt: serverTimestamp(),
+        },
+        { merge: true }
+      );
 
-      toast({ title: "Account Created!", description: "Welcome to LifeSignal AI." });
-      router.push("/dashboard"); // or /login if you want them to sign in again
+      // 4) Send verification email (non-blocking for both roles)
+      try {
+        await sendEmailVerification(cred.user);
+      } catch {
+        /* ignore send failures here; user can re-send later */
+      }
+
+      // 5) Post-signup routing
+      if (role === "caregiver") {
+        // Caregivers go straight to their dashboard (no verify gate)
+        router.replace("/emergency-dashboard");
+      } else {
+        // Main users go to the verify page first; your verify page will route to /dashboard on success
+        router.push(
+          `/verify-email?email=${encodeURIComponent(values.email)}&role=user&next=${encodeURIComponent(next)}`
+        );
+      }
     } catch (err: any) {
+      console.error(err);
       const code = err?.code as string | undefined;
       let message = "Something went wrong. Please try again.";
       if (code === "auth/email-already-in-use") message = "That email is already registered.";
@@ -103,8 +131,13 @@ export default function SignupPage() {
         <Card className="w-full max-w-lg shadow-xl">
           <CardHeader className="text-center">
             <CardTitle className="text-3xl font-headline">Create Your Account</CardTitle>
-            <CardDescription>Join LifeSignal AI to stay safe and connected.</CardDescription>
+            <CardDescription>
+              {role === "caregiver"
+                ? "You’re signing up as a caregiver."
+                : "Join LifeSignal AI to stay safe and connected."}
+            </CardDescription>
           </CardHeader>
+
           <Form {...form}>
             <form onSubmit={form.handleSubmit(onSubmit)}>
               <CardContent className="space-y-4">
@@ -121,6 +154,7 @@ export default function SignupPage() {
                     </FormItem>
                   )}
                 />
+
                 <FormField
                   control={form.control}
                   name="email"
@@ -134,6 +168,7 @@ export default function SignupPage() {
                     </FormItem>
                   )}
                 />
+
                 <FormField
                   control={form.control}
                   name="password"
@@ -148,6 +183,7 @@ export default function SignupPage() {
                     </FormItem>
                   )}
                 />
+
                 <FormField
                   control={form.control}
                   name="confirmPassword"
@@ -162,13 +198,18 @@ export default function SignupPage() {
                   )}
                 />
               </CardContent>
+
               <CardFooter className="flex-col gap-4">
                 <Button type="submit" className="w-full text-lg py-6" disabled={isSubmitting}>
                   {isSubmitting ? "Creating…" : "Create Account"}
                 </Button>
+
                 <p className="text-center text-sm text-muted-foreground">
                   Already have an account?{" "}
-                  <Link href="/login" className="font-semibold text-primary hover:underline">
+                  <Link
+                    href={`/login?role=${encodeURIComponent(role)}&next=${encodeURIComponent(next)}`}
+                    className="font-semibold text-primary hover:underline"
+                  >
                     Sign In
                   </Link>
                 </p>
