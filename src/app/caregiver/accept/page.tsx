@@ -4,7 +4,13 @@
 import { useEffect, useMemo, useState } from "react";
 import { useSearchParams, useRouter } from "next/navigation";
 import { auth, db } from "@/firebase";
-import { doc, getDoc, setDoc, updateDoc, serverTimestamp } from "firebase/firestore";
+import {
+  doc,
+  getDoc,
+  setDoc,
+  updateDoc,
+  serverTimestamp,
+} from "firebase/firestore";
 import { onAuthStateChanged } from "firebase/auth";
 import { Button } from "@/components/ui/button";
 
@@ -41,14 +47,14 @@ export default function CaregiverAcceptPage() {
 
       // Must be signed in; send to caregiver signup (include role=caregiver)
       if (!user) {
-        router.replace(`/signup?role=caregiver&next=${encodeURIComponent(returnUrl)}`);
+        router.replace(
+          `/signup?role=caregiver&next=${encodeURIComponent(returnUrl)}`
+        );
         return;
       }
 
-      // No email verification gate for caregivers (per your flow)
-
       try {
-        // 1) read invite
+        // 1) Read invite
         const inviteRef = doc(db, "invites", inviteId);
         const snap = await getDoc(inviteRef);
         if (!snap.exists()) {
@@ -57,7 +63,7 @@ export default function CaregiverAcceptPage() {
         }
         const inv = snap.data() as any;
 
-        // 2) validate token + status
+        // 2) Validate token + status
         if (inv.status !== "pending") {
           setStatus("Invite already used or revoked.");
           return;
@@ -67,34 +73,77 @@ export default function CaregiverAcceptPage() {
           return;
         }
 
-        // 3) email must match invited email (normalized)
+        // 3) Email must match invited email (normalized)
         const invitedEmail = normalizeEmail(inv.caregiverEmail);
         const signedInEmail = normalizeEmail(user.email || "");
         if (!invitedEmail) {
-          setStatus("Invite is missing the recipient email. Please contact support.");
+          setStatus(
+            "Invite is missing the recipient email. Please contact support."
+          );
           return;
         }
         if (invitedEmail !== signedInEmail) {
-          setStatus("This invite was sent to a different email address.");
-          router.replace(`/signup?role=caregiver&next=${encodeURIComponent(returnUrl)}`);
+          setStatus(
+            "This invite was sent to a different email address. Please sign in with the invited email."
+          );
+          router.replace(
+            `/signup?role=caregiver&next=${encodeURIComponent(returnUrl)}`
+          );
           return;
         }
 
-        // 4) create caregiver link ONCE (include extra fields you want to display)
-        const caregiverRef = doc(db, "users", inv.userId, "caregivers", user.uid);
-        await setDoc(caregiverRef, {
-          caregiverEmail: signedInEmail,
-          inviteId,
-          token: inv.token,          // required by your rules
-          userId: inv.userId,        // helpful for dashboard
-          patientName: inv.patientName || "", // optional (populate when creating invite)
-          createdAt: serverTimestamp(),
-        });
+        // 4) Enrich from the main user's profile (optional)
+        const mainUid = inv.userId as string;
+        const caregiverUid = user.uid;
 
-        // 5) mark invite accepted
+        let patientName = inv.patientName || "";
+        let patientAvatar = "";
+        try {
+          const mainRef = doc(db, "users", mainUid);
+          const mainSnap = await getDoc(mainRef);
+          if (mainSnap.exists()) {
+            const m = mainSnap.data() as any;
+            patientName = patientName || m.displayName || m.name || "";
+            patientAvatar = m.photoURL || m.avatar || "";
+          }
+        } catch {
+          // ok if this fails—link will still be created
+        }
+
+        // 5) Create/merge the caregiver link the dashboard expects:
+        //    Path: /users/{mainUid}/caregivers/{caregiverUid}
+        //    REQUIRED FIELD for dashboard: uid (caregiver uid)
+        const linkRef = doc(db, "users", mainUid, "caregivers", caregiverUid);
+        const linkSnap = await getDoc(linkRef);
+
+        if (!linkSnap.exists()) {
+          await setDoc(linkRef, {
+            uid: caregiverUid, // <-- Dashboard filters on this field
+            caregiverEmail: signedInEmail,
+            inviteId,
+            token: inv.token, // keep if your rules require it
+            userId: mainUid,
+            patientName: patientName || "",
+            patientAvatar: patientAvatar || "",
+            createdAt: serverTimestamp(),
+          });
+        } else {
+          await updateDoc(linkRef, {
+            uid: caregiverUid, // ensure it's present
+            caregiverEmail: signedInEmail,
+            token: inv.token,
+            userId: mainUid,
+            patientName: patientName || "",
+            patientAvatar: patientAvatar || "",
+            updatedAt: serverTimestamp(),
+          });
+        }
+
+        // 6) Mark invite accepted
         await updateDoc(inviteRef, {
           status: "accepted",
           acceptedAt: serverTimestamp(),
+          acceptedBy: caregiverUid,
           token: inv.token,
         });
 
@@ -102,7 +151,9 @@ export default function CaregiverAcceptPage() {
         router.replace("/emergency-dashboard"); // caregiver landing
       } catch (e: any) {
         console.error(e);
-        setStatus("Missing or insufficient permissions. Make sure you’re signed in with the invited email.");
+        setStatus(
+          "Missing or insufficient permissions. Make sure you’re signed in with the invited email."
+        );
       }
     });
 

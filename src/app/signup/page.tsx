@@ -1,7 +1,7 @@
 // app/signup/page.tsx
 "use client";
 
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useForm } from "react-hook-form";
@@ -11,14 +11,32 @@ import * as z from "zod";
 import { Header } from "@/components/header";
 import { Footer } from "@/components/footer";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle, CardFooter } from "@/components/ui/card";
-import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from "@/components/ui/form";
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+  CardFooter,
+} from "@/components/ui/card";
+import {
+  Form,
+  FormControl,
+  FormField,
+  FormItem,
+  FormLabel,
+  FormMessage,
+} from "@/components/ui/form";
 import { Input } from "@/components/ui/input";
 import { Progress } from "@/components/ui/progress";
 import { useToast } from "@/hooks/use-toast";
 
 import { auth, db } from "@/firebase";
-import { createUserWithEmailAndPassword, updateProfile, sendEmailVerification } from "firebase/auth";
+import {
+  createUserWithEmailAndPassword,
+  updateProfile,
+  sendEmailVerification,
+} from "firebase/auth";
 import { doc, serverTimestamp, setDoc } from "firebase/firestore";
 
 const passwordValidation = z
@@ -46,9 +64,18 @@ export default function SignupPage() {
   const params = useSearchParams();
   const { toast } = useToast();
 
-  // Read role + next from the URL (defaults)
+  // Role + return location
   const role = (params.get("role") || "user").toLowerCase(); // "caregiver" | "user"
-  const next = params.get("next") || "/";
+  const rawNext = params.get("next") || "/";
+
+  // Sanitize "next" to avoid open redirects (allow only same-site relative paths)
+  const next = useMemo(() => (rawNext.startsWith("/") ? rawNext : "/"), [rawNext]);
+
+  // Continue URL for email verification to return to your app
+  const continueUrl = useMemo(() => {
+    const base = typeof window === "undefined" ? "" : window.location.origin;
+    return `${base}/verify-email?role=${encodeURIComponent(role)}`;
+  }, [role]);
 
   const [passwordStrength, setPasswordStrength] = useState(0);
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -76,7 +103,11 @@ export default function SignupPage() {
       setIsSubmitting(true);
 
       // 1) Create auth user
-      const cred = await createUserWithEmailAndPassword(auth, values.email, values.password);
+      const cred = await createUserWithEmailAndPassword(
+        auth,
+        values.email.trim().toLowerCase(),
+        values.password
+      );
 
       // 2) Set display name (optional)
       await updateProfile(cred.user, { displayName: values.name });
@@ -88,27 +119,34 @@ export default function SignupPage() {
           uid: cred.user.uid,
           name: values.name,
           email: (cred.user.email || "").toLowerCase(),
-          role, // <-- persist role for routing/authorization later
+          role, // persist role for routing/authorization later
           createdAt: serverTimestamp(),
         },
         { merge: true }
       );
 
-      // 4) Send verification email (non-blocking for both roles)
+      // 4) Send verification email with a return URL back to your app
       try {
-        await sendEmailVerification(cred.user);
+        await sendEmailVerification(cred.user, {
+          url: continueUrl, // brings them back to /verify-email after clicking
+          handleCodeInApp: true,
+        });
       } catch {
-        /* ignore send failures here; user can re-send later */
+        // Ignore failures; user can resend from /verify-email later
       }
 
       // 5) Post-signup routing
       if (role === "caregiver") {
-        // Caregivers go straight to their dashboard (no verify gate)
-        router.replace("/emergency-dashboard");
+        // IMPORTANT: if the caregiver came from an invite accept link,
+        // we must send them BACK to that page so it can create the link doc.
+        // We honor ?next=... when present (e.g., /caregiver/accept?invite=...&token=...)
+        router.replace(next || "/emergency-dashboard");
       } else {
-        // Main users go to the verify page first; your verify page will route to /dashboard on success
+        // Main users: take them to verify flow (it will redirect to /dashboard after verification)
         router.push(
-          `/verify-email?email=${encodeURIComponent(values.email)}&role=user&next=${encodeURIComponent(next)}`
+          `/verify-email?email=${encodeURIComponent(values.email)}&role=user&next=${encodeURIComponent(
+            next || "/"
+          )}`
         );
       }
     } catch (err: any) {
