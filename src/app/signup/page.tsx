@@ -71,11 +71,23 @@ export default function SignupPage() {
   // Sanitize "next" to avoid open redirects (allow only same-site relative paths)
   const next = useMemo(() => (rawNext.startsWith("/") ? rawNext : "/"), [rawNext]);
 
-  // Continue URL for email verification to return to your app
+  // Base origin for action code settings (works on client only)
+  const appOrigin =
+    typeof window === "undefined"
+      ? process.env.NEXT_PUBLIC_APP_ORIGIN || "" // fallback if you ever run this in SSR
+      : window.location.origin;
+
+  // Continue URL for email verification to return to your app.
+  // IMPORTANT: include the fromHosted=1 marker so /verify-email shows success immediately after "Continue".
   const continueUrl = useMemo(() => {
-    const base = typeof window === "undefined" ? "" : window.location.origin;
-    return `${base}/verify-email?role=${encodeURIComponent(role)}`;
-  }, [role]);
+    const q = new URLSearchParams({
+      role,
+      fromHosted: "1",
+      // carry next so verify page can route after success if you want
+      next,
+    }).toString();
+    return `${appOrigin}/verify-email?${q}`;
+  }, [appOrigin, role, next]);
 
   const [passwordStrength, setPasswordStrength] = useState(0);
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -119,36 +131,30 @@ export default function SignupPage() {
           uid: cred.user.uid,
           name: values.name,
           email: (cred.user.email || "").toLowerCase(),
-          role, // persist role for routing/authorization later
+          role,
           createdAt: serverTimestamp(),
         },
         { merge: true }
       );
 
-      // 4) Send verification email with a return URL back to your app
+      // 4) Send verification email with our continueUrl (includes fromHosted=1)
       try {
         await sendEmailVerification(cred.user, {
-          url: continueUrl, // brings them back to /verify-email after clicking
-          handleCodeInApp: true,
+          url: continueUrl,
+          handleCodeInApp: true, // ok either way when using hosted page
         });
-      } catch {
-        // Ignore failures; user can resend from /verify-email later
+      } catch (e) {
+        // Ignore failures; user can resend from /verify-email
+        console.warn("sendEmailVerification failed:", e);
       }
 
-      // 5) Post-signup routing
-      if (role === "caregiver") {
-        // IMPORTANT: if the caregiver came from an invite accept link,
-        // we must send them BACK to that page so it can create the link doc.
-        // We honor ?next=... when present (e.g., /caregiver/accept?invite=...&token=...)
-        router.replace(next || "/emergency-dashboard");
-      } else {
-        // Main users: take them to verify flow (it will redirect to /dashboard after verification)
-        router.push(
-          `/verify-email?email=${encodeURIComponent(values.email)}&role=user&next=${encodeURIComponent(
-            next || "/"
-          )}`
-        );
-      }
+      // 5) Post-signup routing: go to verify page (it will show instructions, and
+      // when they click the email + Continue, verify page will show success immediately).
+      router.push(
+        `/verify-email?email=${encodeURIComponent(values.email)}&role=${encodeURIComponent(
+          role
+        )}&next=${encodeURIComponent(next)}`
+      );
     } catch (err: any) {
       console.error(err);
       const code = err?.code as string | undefined;

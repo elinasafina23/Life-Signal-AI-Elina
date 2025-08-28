@@ -1,19 +1,15 @@
+// app/verify-email/page.tsx
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
 import { useSearchParams, useRouter } from "next/navigation";
 import { auth, db } from "@/firebase";
-import {
-  sendEmailVerification,
-  applyActionCode,
-} from "firebase/auth";
+import { sendEmailVerification, applyActionCode } from "firebase/auth";
 import { doc, getDoc } from "firebase/firestore";
 import { Button } from "@/components/ui/button";
 
 async function resolveRole(uid: string, roleParam: string | null) {
-  if (roleParam && (roleParam === "caregiver" || roleParam === "user")) {
-    return roleParam;
-  }
+  if (roleParam && (roleParam === "caregiver" || roleParam === "user")) return roleParam;
   try {
     const snap = await getDoc(doc(db, "users", uid));
     const role = snap.exists() ? (snap.data() as any).role : undefined;
@@ -27,60 +23,92 @@ export default function VerifyEmailPage() {
   const params = useSearchParams();
   const router = useRouter();
 
-  const roleParam = (params.get("role") || "").toLowerCase() || null;
-  const emailParam = params.get("email");
+  // Inputs carried through links
+  const roleParam = (params.get("role") || "user").toLowerCase(); // "user" | "caregiver"
+  const nextParam = params.get("next") || ""; // optional
+  const emailParam = params.get("email") || "";
+
+  // If the verification email opened this page directly
   const mode = params.get("mode");
   const oobCode = params.get("oobCode");
 
-  const email = emailParam || auth.currentUser?.email || "";
-  const [status, setStatus] = useState("");
-  const [busy, setBusy] = useState(false);
+  // If the user came back from Firebase hosted page "Continue"
+  const fromHosted = params.get("fromHosted") === "1";
 
-  // Where we want Firebase to send users back after they click the link
+  const email = emailParam || auth.currentUser?.email || "";
+
+  const [busy, setBusy] = useState(false);
+  const [status, setStatus] = useState("");
+  const [isVerified, setIsVerified] = useState(false);
+
+  // Build the continueUrl for any (re)send actions from this page
   const continueUrl = useMemo(() => {
     const base = typeof window === "undefined" ? "" : window.location.origin;
-    // Keep role in the URL so we can route correctly after verification
-    const role = roleParam ?? "user";
-    return `${base}/verify-email?role=${encodeURIComponent(role)}`;
-  }, [roleParam]);
+    const qs = new URLSearchParams({
+      role: roleParam,
+      fromHosted: "1",
+      ...(nextParam ? { next: nextParam } : {}),
+    }).toString();
+    return `${base}/verify-email?${qs}`;
+  }, [roleParam, nextParam]);
 
-  // If the page is opened from the email link, complete the verification immediately.
+  // Decide destination after success
+  const desiredDestination = (role: string) => {
+    const fallback = role === "caregiver" ? "/emergency-dashboard" : "/dashboard";
+    return nextParam || fallback;
+  };
+
+  // 1) Apply code or honor hosted return  2) Redirect appropriately
   useEffect(() => {
-    const verifyFromLink = async () => {
-      // We only handle the link if Firebase sent us back here with the code.
-      if (mode !== "verifyEmail" || !oobCode) return;
-
+    const run = async () => {
+      setBusy(true);
       try {
-        setBusy(true);
-        setStatus("Verifying your email…");
-        await applyActionCode(auth, oobCode);
-
-        // Reload the current user if already signed in (optional)
-        if (auth.currentUser) {
-          await auth.currentUser.reload();
-        }
-
-        const u = auth.currentUser;
-        if (u && u.emailVerified) {
-          setStatus("Verified! Redirecting…");
-          const role = await resolveRole(u.uid, roleParam);
-          router.replace(role === "caregiver" ? "/emergency-dashboard" : "/dashboard");
+        if (mode === "verifyEmail" && oobCode) {
+          setStatus("Verifying your email…");
+          await applyActionCode(auth, oobCode);
+          setIsVerified(true);
+          setStatus("Your email has been verified. Redirecting…");
+        } else if (fromHosted) {
+          setIsVerified(true);
+          setStatus("Your email has been verified. Redirecting…");
         } else {
-          // If they weren’t signed in during verification, send them to login.
-          setStatus("Email verified! Please sign in.");
-          router.replace(`/login?role=${roleParam ?? "user"}`);
+          // Not verified yet (user just opened /verify-email directly)
+          setIsVerified(false);
+          setStatus("");
+          return;
         }
-      } catch (err: any) {
+
+        // Try to route signed-in users straight to their destination
+        try {
+          if (auth.currentUser) {
+            await auth.currentUser.reload();
+            const u = auth.currentUser;
+            const role = await resolveRole(u?.uid || "", roleParam);
+            const dest = desiredDestination(role);
+            router.replace(dest);
+            return;
+          }
+        } catch {
+          // ignore and fall through to login redirect
+        }
+
+        // Not signed in—send to login with next
+        const destIfSigned = desiredDestination(roleParam);
+        router.replace(
+          `/login?role=${encodeURIComponent(roleParam)}&next=${encodeURIComponent(destIfSigned)}&verified=1`
+        );
+      } catch (err) {
         console.error(err);
+        setIsVerified(false);
         setStatus("Verification link is invalid or expired. Click Resend to get a new one.");
       } finally {
         setBusy(false);
       }
     };
+    void run();
+  }, [mode, oobCode, fromHosted, roleParam, nextParam, router]);
 
-    void verifyFromLink();
-  }, [mode, oobCode, roleParam, router]);
-
+  // Optional helpers if the user is signed in and needs to refresh/resend
   const refresh = async () => {
     try {
       setBusy(true);
@@ -91,11 +119,10 @@ export default function VerifyEmailPage() {
       }
       await u.reload();
       if (u.emailVerified) {
-        setStatus("Verified! Redirecting…");
         const role = await resolveRole(u.uid, roleParam);
-        router.replace(role === "caregiver" ? "/emergency-dashboard" : "/dashboard");
+        router.replace(desiredDestination(role));
       } else {
-        setStatus("Still not verified. Check your inbox/spam, then click Refresh.");
+        setStatus("Still not verified. Check your inbox and try again.");
       }
     } finally {
       setBusy(false);
@@ -110,16 +137,12 @@ export default function VerifyEmailPage() {
         setStatus("Not signed in. Please sign in again.");
         return;
       }
-
-      // Action Code Settings ensure the email link returns to THIS page.
-      const actionCodeSettings = {
-        url: continueUrl,
+      await sendEmailVerification(u, {
+        url: continueUrl, // includes &fromHosted=1 and carries ?next=
         handleCodeInApp: true,
-      };
-
-      await sendEmailVerification(u, actionCodeSettings);
+      });
       setStatus(`Verification email sent to ${u.email}. Check inbox/spam.`);
-    } catch (err: any) {
+    } catch (err) {
       console.error(err);
       setStatus("Could not send the email. Try again in a minute.");
     } finally {
@@ -132,22 +155,32 @@ export default function VerifyEmailPage() {
       <div className="max-w-md w-full space-y-4">
         <h1 className="text-2xl font-semibold">Verify your email</h1>
 
-        <p>
-          We’ll send a verification link to{" "}
-          <strong>{email || "your email address"}</strong>.
-        </p>
+        {isVerified ? (
+          <p>Your email has been verified. Redirecting…</p>
+        ) : (
+          <p>
+            We’ll send a verification link to{" "}
+            <strong>{email || "your email address"}</strong>.
+          </p>
+        )}
 
-        <div className="flex gap-2">
-          <Button onClick={refresh} disabled={busy}>Refresh</Button>
-          <Button variant="secondary" onClick={resend} disabled={busy}>
-            Resend
-          </Button>
-        </div>
+        {!isVerified && (
+          <div className="flex gap-2">
+            <Button onClick={refresh} disabled={busy}>Refresh</Button>
+            <Button variant="secondary" onClick={resend} disabled={busy}>
+              Resend
+            </Button>
+          </div>
+        )}
 
-        <p className="text-sm">{status}</p>
-        <p className="text-sm text-muted-foreground">
-          If you didn’t receive the email, please wait at least 1 minute before clicking Resend.
-        </p>
+        {!isVerified && (
+          <>
+            <p className="text-sm">{status}</p>
+            <p className="text-sm text-muted-foreground">
+              If you didn’t receive the email, please wait at least 1 minute before clicking Resend.
+            </p>
+          </>
+        )}
       </div>
     </main>
   );
