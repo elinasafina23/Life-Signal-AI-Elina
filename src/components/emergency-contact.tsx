@@ -1,3 +1,4 @@
+// src/components/emergency-contact.tsx
 "use client";
 
 import { useEffect, useState } from "react";
@@ -12,7 +13,7 @@ import * as z from "zod";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import {
-  Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle,
+  Dialog, DialogContent, DialogHeader, DialogTitle,
   DialogTrigger, DialogFooter, DialogClose
 } from "@/components/ui/dialog";
 import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from "@/components/ui/form";
@@ -20,14 +21,15 @@ import { Input } from "@/components/ui/input";
 import { useToast } from "@/hooks/use-toast";
 import { User, Phone, Mail, Pencil } from "lucide-react";
 
-// ⬇️ NEW: invite helper
-import { inviteCaregiver } from "@/lib/inviteCaregiver";
-
-// Validation
-const nameValidation = z.string().min(1, { message: "Name is required" })
+// ---------- Validation ----------
+const nameValidation = z
+  .string()
+  .min(1, { message: "Name is required" })
   .regex(/^[\p{L}\s'-]+$/u, { message: "Only letters, spaces, hyphens, apostrophes." });
 
-const phoneValidation = z.string().min(1, { message: "Phone number is required" })
+const phoneValidation = z
+  .string()
+  .min(1, { message: "Phone number is required" })
   .regex(/^\+?[1-9]\d{6,14}$/, { message: "Invalid phone number format." });
 
 const emergencyContactsSchema = z.object({
@@ -38,7 +40,8 @@ const emergencyContactsSchema = z.object({
   contact2_name: z.string().optional().or(z.literal("")),
   contact2_email: z.string().email({ message: "Invalid email address." }).optional().or(z.literal("")),
   contact2_phone: z.string().regex(/^\+?[1-9]\d{1,14}$/, { message: "Invalid phone number format." }).optional().or(z.literal("")),
-}).refine(v => {
+})
+.refine(v => {
   const any = !!(v.contact2_name || v.contact2_email || v.contact2_phone);
   const all = !!(v.contact2_name && v.contact2_email && v.contact2_phone);
   return !any || all;
@@ -46,7 +49,6 @@ const emergencyContactsSchema = z.object({
 
 type EmergencyContactsFormValues = z.infer<typeof emergencyContactsSchema>;
 
-// ✅ EMPTY defaults
 const initialContacts: EmergencyContactsFormValues = {
   contact1_name: "",
   contact1_email: "",
@@ -56,12 +58,46 @@ const initialContacts: EmergencyContactsFormValues = {
   contact2_phone: "",
 };
 
+// ---------- Server route callers ----------
+async function inviteEmergencyContact(input: { email: string; name?: string; relation?: string }) {
+  const res = await fetch("/api/emergency_contact/invite", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    credentials: "include", // send Firebase session cookie
+    body: JSON.stringify(input),
+  });
+  if (!res.ok) {
+    let msg = "Invite failed";
+    try { const data = await res.json(); msg = data?.error || msg; } catch {}
+    throw new Error(msg);
+  }
+  return res.json(); // { ok: true, alreadyInvited?: boolean }
+}
+
+async function resendInviteEmail(email: string, regenerateToken = false) {
+  const res = await fetch("/api/emergency_contact/invite/resend", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    credentials: "include",
+    body: JSON.stringify({ email, regenerateToken }),
+  });
+  if (!res.ok) {
+    let msg = "Resend failed";
+    try { const data = await res.json(); msg = data?.error || msg; } catch {}
+    throw new Error(msg);
+  }
+  return res.json(); // { ok: true, alreadyAccepted?: boolean }
+}
+
 export function EmergencyContacts() {
   const { toast } = useToast();
   const [uid, setUid] = useState<string | null>(null);
   const [contacts, setContacts] = useState<EmergencyContactsFormValues>(initialContacts);
   const [isDialogOpen, setIsDialogOpen] = useState(false);
   const [loaded, setLoaded] = useState(false); // prevents flash before Firestore load
+
+  // UI state for resend button
+  const [resending, setResending] = useState<string | null>(null); // holds the email currently resending
 
   const form = useForm<EmergencyContactsFormValues>({
     resolver: zodResolver(emergencyContactsSchema),
@@ -109,6 +145,7 @@ export function EmergencyContacts() {
     if (isDialogOpen) form.reset(contacts);
   }, [isDialogOpen, contacts, form]);
 
+  // Save + auto-invite on new/changed emails
   const onSubmit = async (data: EmergencyContactsFormValues) => {
     if (!uid) {
       toast({ title: "Not signed in", description: "Please sign in to save.", variant: "destructive" });
@@ -130,9 +167,8 @@ export function EmergencyContacts() {
     const c2Empty = !c2.contact2_name && !c2.contact2_email && !c2.contact2_phone;
 
     try {
-      // 1) Save contacts
+      // 1) Save contacts in the user profile doc
       if (c2Empty) {
-        // Delete any previously saved Contact 2
         await setDoc(
           doc(db, "users", uid),
           {
@@ -163,10 +199,10 @@ export function EmergencyContacts() {
       const nextC1 = c1.contact1_email.toLowerCase();
       if (!prevC1 || prevC1 !== nextC1) {
         invitePromises.push(
-          inviteCaregiver({
+          inviteEmergencyContact({
             name: c1.contact1_name,
             email: c1.contact1_email,
-            phone: c1.contact1_phone,
+            relation: "primary",
           })
         );
       }
@@ -177,10 +213,10 @@ export function EmergencyContacts() {
         const nextC2 = c2.contact2_email.toLowerCase();
         if (!prevC2 || prevC2 !== nextC2) {
           invitePromises.push(
-            inviteCaregiver({
+            inviteEmergencyContact({
               name: c2.contact2_name,
               email: c2.contact2_email,
-              phone: c2.contact2_phone || undefined,
+              relation: "secondary",
             })
           );
         }
@@ -190,7 +226,7 @@ export function EmergencyContacts() {
         await Promise.all(invitePromises);
         toast({
           title: "Invites sent",
-          description: "We emailed your caregiver(s) an invitation.",
+          description: "We emailed your emergency contact(s) an invitation.",
         });
       } else {
         toast({ title: "Saved", description: "Emergency contacts updated successfully." });
@@ -200,6 +236,25 @@ export function EmergencyContacts() {
     } catch (e: any) {
       console.error("Save failed:", e);
       toast({ title: "Save failed", description: e?.message ?? String(e), variant: "destructive" });
+    }
+  };
+
+  // Manual resend handler
+  const handleResend = async (email?: string | null) => {
+    const target = (email || "").trim().toLowerCase();
+    if (!target) {
+      toast({ title: "Missing email", description: "Add an email first, then try again.", variant: "destructive" });
+      return;
+    }
+    try {
+      setResending(target);
+      // You can set regenerateToken: true to rotate tokens on resend. Keeping false preserves the last link.
+      await resendInviteEmail(target, false);
+      toast({ title: "Invite sent", description: `We sent a new invite to ${target}.` });
+    } catch (e: any) {
+      toast({ title: "Could not resend", description: e?.message ?? "Please try again.", variant: "destructive" });
+    } finally {
+      setResending(null);
     }
   };
 
@@ -310,6 +365,7 @@ export function EmergencyContacts() {
       </CardHeader>
 
       <CardContent className="space-y-6">
+        {/* Contact 1 display + resend */}
         <div className="space-y-2">
           <h4 className="font-semibold">Contact 1</h4>
           <div className="flex items-center gap-3 text-muted-foreground">
@@ -324,9 +380,22 @@ export function EmergencyContacts() {
             <Phone className="h-5 w-5" />
             <span>{contacts.contact1_phone || "—"}</span>
           </div>
+          {!!contacts.contact1_email && (
+            <div className="pt-2">
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() => handleResend(contacts.contact1_email)}
+                disabled={resending === contacts.contact1_email.toLowerCase()}
+              >
+                {resending === contacts.contact1_email.toLowerCase() ? "Sending…" : "Resend invite"}
+              </Button>
+            </div>
+          )}
         </div>
 
-        {(hasContact2) && (
+        {/* Contact 2 display + resend (only if present) */}
+        {hasContact2 && (
           <div className="space-y-2 border-t pt-4">
             <h4 className="font-semibold">Contact 2</h4>
             <div className="flex items-center gap-3 text-muted-foreground">
@@ -341,6 +410,18 @@ export function EmergencyContacts() {
               <Phone className="h-5 w-5" />
               <span>{contacts.contact2_phone}</span>
             </div>
+            {!!contacts.contact2_email && (
+              <div className="pt-2">
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={() => handleResend(contacts.contact2_email)}
+                  disabled={resending === contacts.contact2_email.toLowerCase()}
+                >
+                  {resending === contacts.contact2_email.toLowerCase() ? "Sending…" : "Resend invite"}
+                </Button>
+              </div>
+            )}
           </div>
         )}
       </CardContent>

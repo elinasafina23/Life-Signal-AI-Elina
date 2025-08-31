@@ -2,13 +2,20 @@
 "use client";
 
 import Image from "next/image";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { onAuthStateChanged } from "firebase/auth";
 import { auth, db } from "@/firebase";
 
-// Firestore: collectionGroup + field filter (NO documentId())
-import { collectionGroup, onSnapshot, query, where } from "firebase/firestore";
+// Firestore
+import {
+  collectionGroup,
+  onSnapshot,
+  query,
+  where,
+  doc,
+  Timestamp,
+} from "firebase/firestore";
 
 import { Header } from "@/components/header";
 import { Footer } from "@/components/footer";
@@ -26,14 +33,25 @@ import { Badge } from "@/components/ui/badge";
 import { MapPin, Phone, MessageSquare } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 
+import { normalizeRole } from "@/lib/roles";
+
+type Status = "OK" | "Inactive" | "SOS";
+
 type PatientCard = {
   patientUid: string;
   name: string;
   avatar?: string;
   initials: string;
-  status?: "OK" | "Inactive" | "SOS";
+  status?: Status;
   lastCheckIn?: string;
   location?: string;
+};
+
+type MainUserDoc = {
+  lastCheckinAt?: Timestamp;
+  checkinInterval?: number | string; // minutes
+  sosTriggeredAt?: Timestamp;
+  lastLocationText?: string; // optional, if you store it
 };
 
 function initialsOf(name = "") {
@@ -60,6 +78,26 @@ function getStatusVariant(status?: string) {
   }
 }
 
+function formatWhen(d?: Date | null) {
+  if (!d) return "—";
+  const now = new Date();
+  const sameDay =
+    d.getFullYear() === now.getFullYear() &&
+    d.getMonth() === now.getMonth() &&
+    d.getDate() === now.getDate();
+  const y = new Date(now);
+  y.setDate(now.getDate() - 1);
+  const isYesterday =
+    d.getFullYear() === y.getFullYear() &&
+    d.getMonth() === y.getMonth() &&
+    d.getDate() === y.getDate();
+
+  const time = d.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+  if (sameDay) return `Today at ${time}`;
+  if (isYesterday) return `Yesterday at ${time}`;
+  return `${d.toLocaleDateString()} ${time}`;
+}
+
 export default function EmergencyDashboardPage() {
   const router = useRouter();
   const { toast } = useToast();
@@ -67,64 +105,171 @@ export default function EmergencyDashboardPage() {
   const [patients, setPatients] = useState<PatientCard[]>([]);
   const [loading, setLoading] = useState(true);
 
-  // Keep latest Firestore unsubscribe so we can clean up correctly
-  const unsubRef = useRef<null | (() => void)>(null);
+  // keep latest Firestore unsubscribes
+  const linksUnsubRef = useRef<null | (() => void)>(null);
+  const perPatientUnsubsRef = useRef<Record<string, () => void>>({});
 
   useEffect(() => {
-    // Listen for auth state
-    const unsubAuth = onAuthStateChanged(auth, (user) => {
-      // If we had a previous snapshot listener, stop it
-      if (unsubRef.current) {
-        unsubRef.current();
-        unsubRef.current = null;
+    // Auth gate + role gate
+    const unsubAuth = onAuthStateChanged(auth, async (user) => {
+      // cleanup old listeners
+      if (linksUnsubRef.current) {
+        linksUnsubRef.current();
+        linksUnsubRef.current = null;
       }
+      // cleanup per-patient listeners
+      Object.values(perPatientUnsubsRef.current).forEach((f) => f());
+      perPatientUnsubsRef.current = {};
 
       if (!user) {
-        router.replace("/login?role=caregiver");
+        router.replace(
+          `/login?role=emergency_contact&next=${encodeURIComponent("/emergency-dashboard")}`
+        );
         return;
       }
 
-      // ✅ Correct query:
-      // Find all /users/{mainUid}/caregivers/* where the subdoc field "uid" matches current caregiver
-      // NOTE: Ensure your link doc includes: { uid: caregiverUid, userId: mainUid, patientName, ... }
-      const q = query(collectionGroup(db, "caregivers"), where("uid", "==", user.uid));
+      // role check: only emergency_contact allowed here
+      // (read user doc once via getDoc could work; we’ll piggyback on links query too)
+      // If you want a strict role check, uncomment this block to fetch role first:
+      // const uref = doc(db, "users", user.uid);
+      // const usnap = await getDoc(uref);
+      // const role = normalizeRole(usnap.data()?.role);
+      // if (role !== "emergency_contact") { router.replace("/dashboard"); return; }
 
-      const unsub = onSnapshot(
-        q,
+      // Query all links where this user is the emergency contact:
+      // Path pattern: /users/{mainUid}/emergency_contact/{emergencyUid}
+      const qLinks = query(
+        collectionGroup(db, "emergency_contact"),
+        where("uid", "==", user.uid)
+      );
+
+      linksUnsubRef.current = onSnapshot(
+        qLinks,
         (snap) => {
-          const rows: PatientCard[] = snap.docs.map((d) => {
+          // Build base cards from link docs
+          const next: Record<string, PatientCard> = {};
+          const seenPatientIds: string[] = [];
+
+          snap.docs.forEach((d) => {
             const data = d.data() as any;
+            const patientUid = data.userId || d.ref.parent.parent?.id || "";
+            if (!patientUid) return;
 
-            // Prefer an explicit userId field on the link; fallback to parent doc id
-            const patientUid = data.userId || d.ref.parent.parent?.id || "unknown";
-            const name = data.patientName || "Patient";
-
-            return {
+            const name = data.mainUserName || data.patientName || "Patient";
+            const avatar = data.mainUserAvatar || "";
+            next[patientUid] = {
               patientUid,
               name,
+              avatar: avatar || "https://placehold.co/100x100.png",
               initials: initialsOf(name),
-              avatar: data.patientAvatar || "https://placehold.co/100x100.png",
-              status: data.status || "OK",
-              lastCheckIn: data.lastCheckIn || "",
+              status: "OK", // will be refined by per-patient doc
+              lastCheckIn: "—",
               location: data.location || "",
             };
+            seenPatientIds.push(patientUid);
           });
 
-          setPatients(rows);
+          // Unsubscribe removed patients
+          Object.keys(perPatientUnsubsRef.current).forEach((id) => {
+            if (!seenPatientIds.includes(id)) {
+              perPatientUnsubsRef.current[id]();
+              delete perPatientUnsubsRef.current[id];
+            }
+          });
+
+          // Subscribe to each patient’s main user doc to derive status
+          seenPatientIds.forEach((pid) => {
+            if (perPatientUnsubsRef.current[pid]) return; // already listening
+            const uref = doc(db, "users", pid);
+            perPatientUnsubsRef.current[pid] = onSnapshot(
+              uref,
+              (usnap) => {
+                const base = next[pid] || { patientUid: pid, name: "Patient", initials: "PT" };
+                if (!usnap.exists()) {
+                  // keep base card
+                  setPatients((prev) => {
+                    const map = new Map(prev.map((p) => [p.patientUid, p]));
+                    map.set(pid, base);
+                    return Array.from(map.values());
+                  });
+                  return;
+                }
+
+                const udata = usnap.data() as MainUserDoc;
+                const last = udata.lastCheckinAt instanceof Timestamp ? udata.lastCheckinAt.toDate() : undefined;
+                const rawInt = udata.checkinInterval;
+                const intervalMin =
+                  typeof rawInt === "number"
+                    ? rawInt
+                    : typeof rawInt === "string"
+                    ? parseInt(rawInt, 10)
+                    : 12 * 60; // default 12h
+
+                // derive status
+                let status: Status = "OK";
+                if (udata.sosTriggeredAt instanceof Timestamp) {
+                  status = "SOS";
+                } else if (last) {
+                  const nextDue = last.getTime() + intervalMin * 60 * 1000;
+                  if (Date.now() > nextDue) status = "Inactive";
+                } else {
+                  // no check-ins yet → treat as Inactive to surface attention
+                  status = "Inactive";
+                }
+
+                const location = udata.lastLocationText || base.location;
+
+                const updated: PatientCard = {
+                  ...base,
+                  status,
+                  lastCheckIn: formatWhen(last),
+                  location,
+                };
+
+                setPatients((prev) => {
+                  const map = new Map(prev.map((p) => [p.patientUid, p]));
+                  map.set(pid, updated);
+                  // also ensure we include any cards from the latest links snapshot (next)
+                  Object.values(next).forEach((row) => {
+                    if (!map.has(row.patientUid)) map.set(row.patientUid, row);
+                  });
+                  // stable order by name
+                  return Array.from(map.values()).sort((a, b) =>
+                    a.name.localeCompare(b.name)
+                  );
+                });
+              },
+              (err) => {
+                console.error("[Emergency Dashboard] user doc listen error:", err);
+              }
+            );
+          });
+
+          // Seed UI quickly with link info while per-patient listeners attach
+          setPatients((prev) => {
+            const map = new Map(prev.map((p) => [p.patientUid, p]));
+            Object.values(next).forEach((row) => {
+              if (!map.has(row.patientUid)) map.set(row.patientUid, row);
+            });
+            return Array.from(map.values()).sort((a, b) => a.name.localeCompare(b.name));
+          });
+
           setLoading(false);
         },
         (err) => {
-          console.error("[Caregiver Dashboard] Firestore onSnapshot error:", err);
+          console.error("[Emergency Dashboard] links onSnapshot error:", err);
           setLoading(false);
         }
       );
-
-      // Save unsubscribe so we can clean it up on user change / unmount
-      unsubRef.current = unsub;
     });
 
     return () => {
-      if (unsubRef.current) unsubRef.current();
+      if (linksUnsubRef.current) {
+        linksUnsubRef.current();
+        linksUnsubRef.current = null;
+      }
+      Object.values(perPatientUnsubsRef.current).forEach((f) => f());
+      perPatientUnsubsRef.current = {};
       unsubAuth();
     };
   }, [router]);
@@ -141,7 +286,7 @@ export default function EmergencyDashboardPage() {
       <Header />
       <main className="flex-grow container mx-auto px-4 py-8">
         <h1 className="text-3xl md:text-4xl font-headline font-bold mb-6">
-          Caregiver Dashboard
+          Emergency Contact Dashboard
         </h1>
 
         {loading && <p>Loading your people…</p>}

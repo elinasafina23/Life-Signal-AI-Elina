@@ -1,3 +1,4 @@
+// app/dashboard/page.tsx
 "use client";
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
@@ -10,12 +11,14 @@ import {
   serverTimestamp,
 } from "firebase/firestore";
 import { onAuthStateChanged } from "firebase/auth";
+import { useRouter } from "next/navigation";
 import { auth, db } from "@/firebase";
 
 import { Header } from "@/components/header";
 import { Footer } from "@/components/footer";
 import { VoiceCheckIn } from "@/components/voice-check-in";
-import { EmergencyContacts } from "@/components/emergency-contacts";
+// ✅ updated import: our server-route based card lives here
+import { EmergencyContacts } from "@/components/emergency-contact";
 
 // shadcn/ui
 import { Button } from "@/components/ui/button";
@@ -38,17 +41,22 @@ import { useToast } from "@/hooks/use-toast";
 // icons
 import { Siren, CheckCircle2, Timer, Clock } from "lucide-react";
 
+// roles
+import { normalizeRole, Role } from "@/lib/roles";
+
 // Firestore user document shape (extend as needed)
 interface UserDoc {
   lastCheckinAt?: Timestamp;
   checkinInterval?: number | string; // minutes
   locationSharing?: boolean;
   sosTriggeredAt?: Timestamp;
+  role?: string;
 }
 
 type Status = "safe" | "missed" | "unknown";
 
 export default function DashboardPage() {
+  const router = useRouter();
   const { toast } = useToast();
 
   const [lastCheckIn, setLastCheckIn] = useState<Date | null>(null);
@@ -56,6 +64,7 @@ export default function DashboardPage() {
   const [status, setStatus] = useState<Status>("unknown");
   const [timeLeft, setTimeLeft] = useState<string>("");
   const [locationSharing, setLocationSharing] = useState<boolean | null>(null);
+  const [roleChecked, setRoleChecked] = useState(false);
 
   const userDocUnsubRef = useRef<(() => void) | null>(null);
   const userRef = useRef<ReturnType<typeof doc> | null>(null);
@@ -76,6 +85,7 @@ export default function DashboardPage() {
         setStatus("unknown");
         setTimeLeft("");
         setLocationSharing(null);
+        setRoleChecked(true);
         return;
       }
 
@@ -86,8 +96,21 @@ export default function DashboardPage() {
       await setDoc(uref, { createdAt: serverTimestamp() }, { merge: true });
 
       const unsub = onSnapshot(uref, (snap) => {
-        if (!snap.exists()) return;
+        if (!snap.exists()) {
+          setRoleChecked(true);
+          return;
+        }
         const data = snap.data() as UserDoc;
+
+        // 🔐 Role gate: emergency contacts shouldn't be here
+        const r = normalizeRole(data.role);
+        if (r === "emergency_contact") {
+          // redirect them to their dashboard
+          router.replace("/emergency-dashboard");
+          return;
+        }
+        // mark that we've checked the role so UI can render
+        setRoleChecked(true);
 
         if (data.lastCheckinAt instanceof Timestamp) {
           setLastCheckIn(data.lastCheckinAt.toDate());
@@ -121,7 +144,7 @@ export default function DashboardPage() {
         userDocUnsubRef.current = null;
       }
     };
-  }, []);
+  }, [router]);
 
   // Derived next check-in time
   const nextCheckIn = useMemo(() => {
@@ -196,7 +219,11 @@ export default function DashboardPage() {
       });
       toast({ title: "Checked In!", description: "Your status has been updated to 'OK'." });
     } catch (e: any) {
-      toast({ title: "Check-in failed", description: e?.message ?? "Please try again.", variant: "destructive" });
+      toast({
+        title: "Check-in failed",
+        description: e?.message ?? "Please try again.",
+        variant: "destructive",
+      });
     }
   };
 
@@ -212,11 +239,15 @@ export default function DashboardPage() {
         variant: "destructive",
       });
     } catch (e: any) {
-      toast({ title: "Unable to send SOS", description: e?.message ?? "Please try again.", variant: "destructive" });
+      toast({
+        title: "Unable to send SOS",
+        description: e?.message ?? "Please try again.",
+        variant: "destructive",
+      });
     }
   };
 
-  const HOURS_OPTIONS = [3, 6, 10, 12, 18, 24] as const;
+  const HOURS_OPTIONS = [1, 2, 3, 6, 10, 12, 18, 24] as const;
   const selectedHours = useMemo(() => {
     const h = Math.round(intervalMinutes / 60);
     return HOURS_OPTIONS.includes(h as any) ? String(h) : "12"; // default display
@@ -234,9 +265,34 @@ export default function DashboardPage() {
         description: `Your check-in interval has been set to every ${hours} hours.`,
       });
     } catch (e: any) {
-      toast({ title: "Update failed", description: e?.message ?? "Please try again.", variant: "destructive" });
+      toast({
+        title: "Update failed",
+        description: e?.message ?? "Please try again.",
+        variant: "destructive",
+      });
     }
   };
+
+  // Don't flash dashboard content before we confirm role
+  if (!roleChecked) {
+    return (
+      <div className="flex flex-col min-h-screen bg-secondary">
+        <Header />
+        <main className="flex-grow container mx-auto px-4 py-8">
+          <Card className="shadow-lg">
+            <CardHeader>
+              <CardTitle className="text-2xl font-headline">Loading…</CardTitle>
+              <CardDescription>Preparing your dashboard.</CardDescription>
+            </CardHeader>
+            <CardContent>
+              <div className="h-24 animate-pulse bg-muted rounded" />
+            </CardContent>
+          </Card>
+        </main>
+        <Footer />
+      </div>
+    );
+  }
 
   return (
     <div className="flex flex-col min-h-screen bg-secondary">
@@ -268,7 +324,7 @@ export default function DashboardPage() {
             <Card className="text-center shadow-lg hover:shadow-xl transition-shadow">
               <CardHeader>
                 <CardTitle className="text-3xl font-headline">Manual Check-in</CardTitle>
-                <CardDescription>Let your contacts know you're safe.</CardDescription>
+                <CardDescription>Let your emergency contacts know you're safe.</CardDescription>
               </CardHeader>
               <CardContent>
                 <Button
@@ -318,17 +374,25 @@ export default function DashboardPage() {
               </CardHeader>
               <CardContent className="space-y-2">
                 <p className="text-lg">
-                  Last Check-in: <span className="font-bold text-primary">{formatWhen(lastCheckIn)}</span>
+                  Last Check-in:{" "}
+                  <span className="font-bold text-primary">{formatWhen(lastCheckIn)}</span>
                 </p>
                 <p className="text-lg">
-                  Next scheduled check-in: {" "}
+                  Next scheduled check-in:{" "}
                   <span className="font-bold text-primary">{formatWhen(nextCheckIn)}</span>
                 </p>
                 <p className="text-lg">
-                  Countdown: <span className={status === "missed" ? "font-bold text-destructive" : "font-bold text-primary"}>{timeLeft || "—"}</span>
+                  Countdown:{" "}
+                  <span
+                    className={
+                      status === "missed" ? "font-bold text-destructive" : "font-bold text-primary"
+                    }
+                  >
+                    {timeLeft || "—"}
+                  </span>
                 </p>
                 <p className="text-lg">
-                  Status: {" "}
+                  Status:{" "}
                   <span
                     className={
                       status === "safe"
@@ -342,14 +406,16 @@ export default function DashboardPage() {
                   </span>
                 </p>
                 <p className="text-lg">
-                  Location Sharing: {" "}
-                  <span className={
-                    locationSharing === true
-                      ? "font-bold text-green-600"
-                      : locationSharing === false
-                      ? "font-bold text-destructive"
-                      : "font-bold text-muted-foreground"
-                  }>
+                  Location Sharing:{" "}
+                  <span
+                    className={
+                      locationSharing === true
+                        ? "font-bold text-green-600"
+                        : locationSharing === false
+                        ? "font-bold text-destructive"
+                        : "font-bold text-muted-foreground"
+                    }
+                  >
                     {locationSharing === null ? "—" : locationSharing ? "Enabled" : "Disabled"}
                   </span>
                 </p>

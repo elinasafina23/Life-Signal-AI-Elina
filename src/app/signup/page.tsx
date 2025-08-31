@@ -39,6 +39,9 @@ import {
 } from "firebase/auth";
 import { doc, serverTimestamp, setDoc } from "firebase/firestore";
 
+// canonical roles
+import { normalizeRole, Role } from "@/lib/roles";
+
 const passwordValidation = z
   .string()
   .min(8, { message: "Password must be at least 8 characters long." })
@@ -64,30 +67,33 @@ export default function SignupPage() {
   const params = useSearchParams();
   const { toast } = useToast();
 
-  // Role + return location
-  const role = (params.get("role") || "user").toLowerCase(); // "caregiver" | "user"
-  const rawNext = params.get("next") || "/";
+  // Role + optional invite token
+  const role: Role = normalizeRole(params.get("role")) ?? "main_user"; // 'main_user' | 'emergency_contact'
+  const token = params.get("token") || null;
 
-  // Sanitize "next" to avoid open redirects (allow only same-site relative paths)
-  const next = useMemo(() => (rawNext.startsWith("/") ? rawNext : "/"), [rawNext]);
+  // Sanitize "next": same-site only AND ignore "/" (treat as unset)
+  const rawNext = params.get("next");
+  const next = useMemo(() => {
+    const n = rawNext && rawNext.startsWith("/") ? rawNext : "";
+    return n === "/" ? "" : n;
+  }, [rawNext]);
 
-  // Base origin for action code settings (works on client only)
+  // Base origin for action code settings (client only)
   const appOrigin =
     typeof window === "undefined"
-      ? process.env.NEXT_PUBLIC_APP_ORIGIN || "" // fallback if you ever run this in SSR
+      ? process.env.NEXT_PUBLIC_APP_ORIGIN || ""
       : window.location.origin;
 
-  // Continue URL for email verification to return to your app.
-  // IMPORTANT: include the fromHosted=1 marker so /verify-email shows success immediately after "Continue".
+  // Continue URL for email verification; include only meaningful params
   const continueUrl = useMemo(() => {
     const q = new URLSearchParams({
       role,
       fromHosted: "1",
-      // carry next so verify page can route after success if you want
-      next,
+      ...(next ? { next } : {}),
+      ...(token ? { token } : {}),
     }).toString();
     return `${appOrigin}/verify-email?${q}`;
-  }, [appOrigin, role, next]);
+  }, [appOrigin, role, next, token]);
 
   const [passwordStrength, setPasswordStrength] = useState(0);
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -124,36 +130,34 @@ export default function SignupPage() {
       // 2) Set display name (optional)
       await updateProfile(cred.user, { displayName: values.name });
 
-      // 3) Create/merge Firestore profile and store the role
+      // 3) Create/merge Firestore profile with canonical role
       await setDoc(
         doc(db, "users", cred.user.uid),
         {
           uid: cred.user.uid,
           name: values.name,
           email: (cred.user.email || "").toLowerCase(),
-          role,
+          role, // 'main_user' | 'emergency_contact'
           createdAt: serverTimestamp(),
         },
         { merge: true }
       );
 
-      // 4) Send verification email with our continueUrl (includes fromHosted=1)
+      // 4) Send verification email
       try {
         await sendEmailVerification(cred.user, {
           url: continueUrl,
-          handleCodeInApp: true, // ok either way when using hosted page
+          handleCodeInApp: true,
         });
       } catch (e) {
-        // Ignore failures; user can resend from /verify-email
         console.warn("sendEmailVerification failed:", e);
       }
 
-      // 5) Post-signup routing: go to verify page (it will show instructions, and
-      // when they click the email + Continue, verify page will show success immediately).
+      // 5) Route to verify page; only include next when meaningful
       router.push(
-        `/verify-email?email=${encodeURIComponent(values.email)}&role=${encodeURIComponent(
-          role
-        )}&next=${encodeURIComponent(next)}`
+        `/verify-email?email=${encodeURIComponent(values.email)}&role=${encodeURIComponent(role)}${
+          next ? `&next=${encodeURIComponent(next)}` : ""
+        }${token ? `&token=${encodeURIComponent(token)}` : ""}`
       );
     } catch (err: any) {
       console.error(err);
@@ -176,9 +180,9 @@ export default function SignupPage() {
           <CardHeader className="text-center">
             <CardTitle className="text-3xl font-headline">Create Your Account</CardTitle>
             <CardDescription>
-              {role === "caregiver"
-                ? "You’re signing up as a caregiver."
-                : "Join LifeSignal AI to stay safe and connected."}
+              {role === "emergency_contact"
+                ? "You’re signing up as an emergency contact."
+                : "Create your main user account."}
             </CardDescription>
           </CardHeader>
 
@@ -251,7 +255,9 @@ export default function SignupPage() {
                 <p className="text-center text-sm text-muted-foreground">
                   Already have an account?{" "}
                   <Link
-                    href={`/login?role=${encodeURIComponent(role)}&next=${encodeURIComponent(next)}`}
+                    href={`/login?role=${encodeURIComponent(role)}${
+                      next ? `&next=${encodeURIComponent(next)}` : ""
+                    }${token ? `&token=${encodeURIComponent(token)}` : ""}`}
                     className="font-semibold text-primary hover:underline"
                   >
                     Sign In
