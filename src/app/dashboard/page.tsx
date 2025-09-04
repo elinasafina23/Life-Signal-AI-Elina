@@ -17,7 +17,6 @@ import { auth, db } from "@/firebase";
 import { Header } from "@/components/header";
 import { Footer } from "@/components/footer";
 import { VoiceCheckIn } from "@/components/voice-check-in";
-// ✅ updated import: our server-route based card lives here
 import { EmergencyContacts } from "@/components/emergency-contact";
 
 // shadcn/ui
@@ -42,9 +41,11 @@ import { useToast } from "@/hooks/use-toast";
 import { Siren, CheckCircle2, Timer, Clock } from "lucide-react";
 
 // roles
-import { normalizeRole, Role } from "@/lib/roles";
+import { normalizeRole } from "@/lib/roles";
 
-// Firestore user document shape (extend as needed)
+// ✅ device registration (primary role for this dashboard)
+import { registerDevice } from "@/lib/useFcmToken";
+
 interface UserDoc {
   lastCheckinAt?: Timestamp;
   checkinInterval?: number | string; // minutes
@@ -65,6 +66,7 @@ export default function DashboardPage() {
   const [timeLeft, setTimeLeft] = useState<string>("");
   const [locationSharing, setLocationSharing] = useState<boolean | null>(null);
   const [roleChecked, setRoleChecked] = useState(false);
+  const [uid, setUid] = useState<string | null>(null);
 
   const userDocUnsubRef = useRef<(() => void) | null>(null);
   const userRef = useRef<ReturnType<typeof doc> | null>(null);
@@ -80,6 +82,7 @@ export default function DashboardPage() {
 
       if (!user) {
         userRef.current = null;
+        setUid(null);
         setLastCheckIn(null);
         setIntervalMinutes(12 * 60);
         setStatus("unknown");
@@ -89,10 +92,11 @@ export default function DashboardPage() {
         return;
       }
 
+      setUid(user.uid);
       const uref = doc(db, "users", user.uid);
       userRef.current = uref;
 
-      // Ensure the doc exists so updateDoc won't fail later
+      // Ensure doc exists so later updates don't fail
       await setDoc(uref, { createdAt: serverTimestamp() }, { merge: true });
 
       const unsub = onSnapshot(uref, (snap) => {
@@ -102,14 +106,13 @@ export default function DashboardPage() {
         }
         const data = snap.data() as UserDoc;
 
-        // 🔐 Role gate: emergency contacts shouldn't be here
+        // Gate by role: emergency contacts aren't allowed here
         const r = normalizeRole(data.role);
         if (r === "emergency_contact") {
-          // redirect them to their dashboard
           router.replace("/emergency-dashboard");
           return;
         }
-        // mark that we've checked the role so UI can render
+
         setRoleChecked(true);
 
         if (data.lastCheckinAt instanceof Timestamp) {
@@ -146,13 +149,21 @@ export default function DashboardPage() {
     };
   }, [router]);
 
+  // ✅ Register this device for push in the main dashboard (role: "primary")
+  useEffect(() => {
+    if (!roleChecked || !uid) return;
+    // Only run registration when we're definitively on the primary dashboard
+    // (If you also use role in UI state, you could gate it further.)
+    registerDevice(uid, "primary"); // stores token under users/{uid}/devices/{deviceId} with role: "primary"
+  }, [roleChecked, uid]);
+
   // Derived next check-in time
   const nextCheckIn = useMemo(() => {
     if (!lastCheckIn) return null;
     return new Date(lastCheckIn.getTime() + intervalMinutes * 60 * 1000);
   }, [lastCheckIn, intervalMinutes]);
 
-  // Countdown + status (clamped, zero-padded)
+  // Countdown + status
   useEffect(() => {
     if (!nextCheckIn) {
       setStatus("unknown");
@@ -212,7 +223,7 @@ export default function DashboardPage() {
   const handleCheckIn = async () => {
     try {
       if (!userRef.current) throw new Error("Not signed in");
-      // Optimistic UI
+      // optimistic UI
       setLastCheckIn(new Date());
       await updateDoc(userRef.current, {
         lastCheckinAt: serverTimestamp(),
@@ -230,7 +241,7 @@ export default function DashboardPage() {
   const handleSOS = async () => {
     try {
       if (!userRef.current) throw new Error("Not signed in");
-      await updateDoc(userRef.current, {
+    await updateDoc(userRef.current, {
         sosTriggeredAt: serverTimestamp(),
       });
       toast({
@@ -250,7 +261,7 @@ export default function DashboardPage() {
   const HOURS_OPTIONS = [1, 2, 3, 6, 10, 12, 18, 24] as const;
   const selectedHours = useMemo(() => {
     const h = Math.round(intervalMinutes / 60);
-    return HOURS_OPTIONS.includes(h as any) ? String(h) : "12"; // default display
+    return HOURS_OPTIONS.includes(h as any) ? String(h) : "12";
   }, [intervalMinutes]);
 
   const handleIntervalChange = async (value: string) => {
@@ -273,7 +284,7 @@ export default function DashboardPage() {
     }
   };
 
-  // Don't flash dashboard content before we confirm role
+  // Don't flash dashboard before we confirm role
   if (!roleChecked) {
     return (
       <div className="flex flex-col min-h-screen bg-secondary">

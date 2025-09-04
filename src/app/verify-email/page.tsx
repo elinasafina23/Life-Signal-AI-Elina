@@ -11,7 +11,9 @@ import { normalizeRole, Role } from "@/lib/roles";
 
 const ACCEPT_API = "/api/emergency_contact/accept";
 const EMERGENCY_DASH = "/emergency-dashboard";
+const MAIN_DASH = "/dashboard";
 
+// Resolve role from URL if present; else from Firestore; else default to main_user
 async function resolveRole(uid: string, roleParam: string | null): Promise<Role> {
   const fromUrl = normalizeRole(roleParam);
   if (fromUrl) return fromUrl;
@@ -25,17 +27,22 @@ async function resolveRole(uid: string, roleParam: string | null): Promise<Role>
   }
 }
 
-async function setSessionCookie(): Promise<boolean> {
+// Create/refresh the server session cookie from the current Firebase ID token
+async function ensureSessionCookie(): Promise<boolean> {
   const u = auth.currentUser;
   if (!u) return false;
-  const idToken = await u.getIdToken(true);
-  const res = await fetch("/api/auth/session", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    credentials: "include",
-    body: JSON.stringify({ idToken }),
-  });
-  return res.ok;
+  try {
+    const idToken = await u.getIdToken(true);
+    const res = await fetch("/api/auth/session", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      credentials: "include",
+      body: JSON.stringify({ idToken }),
+    });
+    return res.ok;
+  } catch {
+    return false;
+  }
 }
 
 export default function VerifyEmailPage() {
@@ -75,15 +82,14 @@ export default function VerifyEmailPage() {
 
   // destination after success
   const desiredDestination = (role: Role) =>
-    nextParam || (role === "emergency_contact" ? EMERGENCY_DASH : "/dashboard");
+    nextParam || (role === "emergency_contact" ? EMERGENCY_DASH : MAIN_DASH);
 
+  // Try to accept the invite token (only for emergency_contact flows)
   const tryAcceptInvite = async (): Promise<boolean> => {
-    if (!token) return true;
+    if (!token) return true; // nothing to do
 
-    // make sure server session cookie exists
-    await setSessionCookie();
-
-    const attempt = async () =>
+    // helper to call API
+    const attempt = () =>
       fetch(ACCEPT_API, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -91,33 +97,52 @@ export default function VerifyEmailPage() {
         body: JSON.stringify({ token }),
       });
 
-    let res = await attempt();
+    try {
+      // make sure server session cookie exists before first attempt
+      await ensureSessionCookie();
 
-    // Retry once on 401 after forcing a fresh session cookie
-    if (res.status === 401) {
-      const ok = await setSessionCookie();
-      if (ok) res = await attempt();
+      let res = await attempt();
+
+      // Retry once on 401 after forcing a fresh session cookie
+      if (res.status === 401 && auth.currentUser) {
+        const ok = await ensureSessionCookie();
+        if (ok) res = await attempt();
+      }
+
+      if (res.ok) return true;
+
       if (res.status === 401) {
+        // unauthenticated → send to login with role/token/next
         router.replace(
-          `/login?role=emergency_contact&next=${encodeURIComponent(EMERGENCY_DASH)}&token=${encodeURIComponent(
-            token
-          )}&verified=1`
+          `/login?role=emergency_contact&next=${encodeURIComponent(
+            desiredDestination("emergency_contact")
+          )}&token=${encodeURIComponent(token)}&verified=1`
         );
         return false;
       }
-    }
 
-    // If wrong role/email, route to the accept page which shows a clear sign-out flow
-    if (res.status === 403) {
-      router.replace(`/emergency_contact/accept?token=${encodeURIComponent(token)}`);
+      if (res.status === 403) {
+        // wrong role/email → go to accept page which shows sign-out flow
+        router.replace(`/emergency_contact/accept?token=${encodeURIComponent(token)}`);
+        return false;
+      }
+
+      // Other errors (e.g., expired 410 / used 409)
+      try {
+        const { error } = await res.json();
+        setStatus(error || "Invite acceptance failed.");
+      } catch {
+        setStatus("Invite acceptance failed.");
+      }
+      return false;
+    } catch {
+      setStatus("Network error while accepting the invite.");
       return false;
     }
-
-    return res.ok;
   };
 
   // 1) apply code or honor hosted return
-  // 2) accept invite (if token)
+  // 2) accept invite (if token & emergency_contact)
   // 3) redirect
   useEffect(() => {
     const run = async () => {
@@ -138,11 +163,14 @@ export default function VerifyEmailPage() {
         }
 
         if (auth.currentUser) {
+          // Make sure server session cookie exists for API calls
+          await ensureSessionCookie();
+
           await auth.currentUser.reload();
           const role = await resolveRole(auth.currentUser.uid, params.get("role"));
           if (role === "emergency_contact") {
             const ok = await tryAcceptInvite();
-            if (!ok) return; // redirected already
+            if (!ok) return; // redirected to login or accept page or showed an error
           }
           router.replace(desiredDestination(role));
           return;
@@ -176,7 +204,9 @@ export default function VerifyEmailPage() {
         return;
       }
       await u.reload();
+
       if (u.emailVerified) {
+        await ensureSessionCookie();
         const role = await resolveRole(u.uid, params.get("role"));
         if (role === "emergency_contact") {
           const ok = await tryAcceptInvite();
@@ -221,7 +251,8 @@ export default function VerifyEmailPage() {
           <p>Your email has been verified. Redirecting…</p>
         ) : (
           <p>
-            We’ll send a verification link to <strong>{email || "your email address"}</strong>.
+            We’ll send a verification link to{" "}
+            <strong>{email || "your email address"}</strong>.
           </p>
         )}
 

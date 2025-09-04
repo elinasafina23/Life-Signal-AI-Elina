@@ -38,7 +38,7 @@ export default function Home() {
     className="text-lg py-8 px-14 min-w-[260px]" 
     variant="secondary"
   >
-    <Link href="/signup/caregiver">Caregiver Sign Up</Link>
+   <Link href="/signup/emergency-contact">Emergency Contact Sign Up</Link>
   </Button>
 </div>
           

@@ -8,7 +8,7 @@ const alias: Record<string, Role> = {
   'main-user': 'main_user',
   'main user': 'main_user',
   user: 'main_user',
-  patient: 'main_user',
+  mainUser: 'main_user',
 
   emergency_contact: 'emergency_contact',
   'emergency-contact': 'emergency_contact',

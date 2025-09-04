@@ -21,6 +21,9 @@ import { Input } from "@/components/ui/input";
 import { useToast } from "@/hooks/use-toast";
 import { User, Phone, Mail, Pencil } from "lucide-react";
 
+// ✅ Use the drop-in client helper that ONLY creates invite docs/emails
+import { inviteEmergencyContact as sendInvite } from "@/lib/inviteEmergencyContact";
+
 // ---------- Validation ----------
 const nameValidation = z
   .string()
@@ -57,37 +60,6 @@ const initialContacts: EmergencyContactsFormValues = {
   contact2_email: "",
   contact2_phone: "",
 };
-
-// ---------- Server route callers ----------
-async function inviteEmergencyContact(input: { email: string; name?: string; relation?: string }) {
-  const res = await fetch("/api/emergency_contact/invite", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    credentials: "include", // send Firebase session cookie
-    body: JSON.stringify(input),
-  });
-  if (!res.ok) {
-    let msg = "Invite failed";
-    try { const data = await res.json(); msg = data?.error || msg; } catch {}
-    throw new Error(msg);
-  }
-  return res.json(); // { ok: true, alreadyInvited?: boolean }
-}
-
-async function resendInviteEmail(email: string, regenerateToken = false) {
-  const res = await fetch("/api/emergency_contact/invite/resend", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    credentials: "include",
-    body: JSON.stringify({ email, regenerateToken }),
-  });
-  if (!res.ok) {
-    let msg = "Resend failed";
-    try { const data = await res.json(); msg = data?.error || msg; } catch {}
-    throw new Error(msg);
-  }
-  return res.json(); // { ok: true, alreadyAccepted?: boolean }
-}
 
 export function EmergencyContacts() {
   const { toast } = useToast();
@@ -199,7 +171,7 @@ export function EmergencyContacts() {
       const nextC1 = c1.contact1_email.toLowerCase();
       if (!prevC1 || prevC1 !== nextC1) {
         invitePromises.push(
-          inviteEmergencyContact({
+          sendInvite({
             name: c1.contact1_name,
             email: c1.contact1_email,
             relation: "primary",
@@ -213,7 +185,7 @@ export function EmergencyContacts() {
         const nextC2 = c2.contact2_email.toLowerCase();
         if (!prevC2 || prevC2 !== nextC2) {
           invitePromises.push(
-            inviteEmergencyContact({
+            sendInvite({
               name: c2.contact2_name,
               email: c2.contact2_email,
               relation: "secondary",
@@ -239,17 +211,22 @@ export function EmergencyContacts() {
     }
   };
 
-  // Manual resend handler
+  // Manual resend handler — calls the same client helper to rotate a fresh invite
   const handleResend = async (email?: string | null) => {
-    const target = (email || "").trim().toLowerCase();
+    const target = (email || "").trim();
     if (!target) {
       toast({ title: "Missing email", description: "Add an email first, then try again.", variant: "destructive" });
       return;
     }
     try {
-      setResending(target);
-      // You can set regenerateToken: true to rotate tokens on resend. Keeping false preserves the last link.
-      await resendInviteEmail(target, false);
+      setResending(target.toLowerCase());
+
+      // Determine which contact we're resending for to set relation/name
+      const isC1 = target.toLowerCase() === (contacts.contact1_email || "").toLowerCase();
+      const relation = isC1 ? "primary" : "secondary";
+      const name = isC1 ? contacts.contact1_name : contacts.contact2_name;
+
+      await sendInvite({ email: target, name, relation });
       toast({ title: "Invite sent", description: `We sent a new invite to ${target}.` });
     } catch (e: any) {
       toast({ title: "Could not resend", description: e?.message ?? "Please try again.", variant: "destructive" });

@@ -39,7 +39,6 @@ import {
 } from "firebase/auth";
 import { doc, serverTimestamp, setDoc } from "firebase/firestore";
 
-// canonical roles
 import { normalizeRole, Role } from "@/lib/roles";
 
 const passwordValidation = z
@@ -68,23 +67,23 @@ export default function SignupPage() {
   const { toast } = useToast();
 
   // Role + optional invite token
-  const role: Role = normalizeRole(params.get("role")) ?? "main_user"; // 'main_user' | 'emergency_contact'
+  const role: Role = normalizeRole(params.get("role")) ?? "main_user";
   const token = params.get("token") || null;
 
-  // Sanitize "next": same-site only AND ignore "/" (treat as unset)
+  // Sanitize "next": allow same-site paths only; treat "/" as unset
   const rawNext = params.get("next");
   const next = useMemo(() => {
     const n = rawNext && rawNext.startsWith("/") ? rawNext : "";
     return n === "/" ? "" : n;
   }, [rawNext]);
 
-  // Base origin for action code settings (client only)
+  // Base origin for action code settings
   const appOrigin =
     typeof window === "undefined"
       ? process.env.NEXT_PUBLIC_APP_ORIGIN || ""
       : window.location.origin;
 
-  // Continue URL for email verification; include only meaningful params
+  // Continue URL for email verification; include role/fromHosted and only meaningful params
   const continueUrl = useMemo(() => {
     const q = new URLSearchParams({
       role,
@@ -127,7 +126,7 @@ export default function SignupPage() {
         values.password
       );
 
-      // 2) Set display name (optional)
+      // 2) Set display name
       await updateProfile(cred.user, { displayName: values.name });
 
       // 3) Create/merge Firestore profile with canonical role
@@ -143,7 +142,7 @@ export default function SignupPage() {
         { merge: true }
       );
 
-      // 4) Send verification email
+      // 4) Send verification email (hosted flow returns to /verify-email)
       try {
         await sendEmailVerification(cred.user, {
           url: continueUrl,
@@ -153,7 +152,7 @@ export default function SignupPage() {
         console.warn("sendEmailVerification failed:", e);
       }
 
-      // 5) Route to verify page; only include next when meaningful
+      // 5) Route to verify-email; include next/token only when present
       router.push(
         `/verify-email?email=${encodeURIComponent(values.email)}&role=${encodeURIComponent(role)}${
           next ? `&next=${encodeURIComponent(next)}` : ""

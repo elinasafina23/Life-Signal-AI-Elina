@@ -10,7 +10,7 @@ export async function POST(req: NextRequest) {
     if (!idToken) return NextResponse.json({ error: "idToken required" }, { status: 400 });
 
     // Verify the client ID token and mint a session cookie
-    await adminAuth.verifyIdToken(idToken);
+    await adminAuth.verifyIdToken(idToken, true);
     const sessionCookie = await adminAuth.createSessionCookie(idToken, { expiresIn: EXPIRES_IN });
 
     const res = NextResponse.json({ ok: true });

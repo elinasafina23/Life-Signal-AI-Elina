@@ -2,7 +2,7 @@
 "use client";
 
 import Image from "next/image";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { onAuthStateChanged } from "firebase/auth";
 import { auth, db } from "@/firebase";
@@ -33,12 +33,15 @@ import { Badge } from "@/components/ui/badge";
 import { MapPin, Phone, MessageSquare } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 
+// ✅ import device registration (with role tagging)
+import { registerDevice } from "@/lib/useFcmToken";
+// (Optional) if you store role on emergency-contact users, you can gate/redirect:
 import { normalizeRole } from "@/lib/roles";
 
 type Status = "OK" | "Inactive" | "SOS";
 
-type PatientCard = {
-  patientUid: string;
+type MainUserCard = {
+  mainUserUid: string;
   name: string;
   avatar?: string;
   initials: string;
@@ -51,7 +54,8 @@ type MainUserDoc = {
   lastCheckinAt?: Timestamp;
   checkinInterval?: number | string; // minutes
   sosTriggeredAt?: Timestamp;
-  lastLocationText?: string; // optional, if you store it
+  location?: string;
+  role?: string; // optional if you mirror role here
 };
 
 function initialsOf(name = "") {
@@ -102,24 +106,32 @@ export default function EmergencyDashboardPage() {
   const router = useRouter();
   const { toast } = useToast();
 
-  const [patients, setPatients] = useState<PatientCard[]>([]);
+  const [mainUsers, setMainUsers] = useState<MainUserCard[]>([]);
   const [loading, setLoading] = useState(true);
+  const [uid, setUid] = useState<string | null>(null);
 
-  // keep latest Firestore unsubscribes
-  const linksUnsubRef = useRef<null | (() => void)>(null);
-  const perPatientUnsubsRef = useRef<Record<string, () => void>>({});
+  // keep latest Firestore unsubscribes (links + per-user by id)
+  const unsubsRef = useRef<Record<string, () => void>>({});
+
+  // cache the latest link info so user-doc listeners always merge with fresh base data
+  const linkInfoRef = useRef<
+    Record<string, { name: string; avatar?: string; location?: string }>
+  >({});
+
+  // gate: only clear loading after the first links snapshot arrives
+  const firstLinksSnapSeenRef = useRef(false);
 
   useEffect(() => {
-    // Auth gate + role gate
-    const unsubAuth = onAuthStateChanged(auth, async (user) => {
-      // cleanup old listeners
-      if (linksUnsubRef.current) {
-        linksUnsubRef.current();
-        linksUnsubRef.current = null;
-      }
-      // cleanup per-patient listeners
-      Object.values(perPatientUnsubsRef.current).forEach((f) => f());
-      perPatientUnsubsRef.current = {};
+    // Main auth subscription
+    const unsubAuth = onAuthStateChanged(auth, (user) => {
+      // clean up all old listeners
+      Object.values(unsubsRef.current).forEach((unsub) => unsub());
+      unsubsRef.current = {};
+      linkInfoRef.current = {};
+      firstLinksSnapSeenRef.current = false;
+      setMainUsers([]);
+      setLoading(true);
+      setUid(null);
 
       if (!user) {
         router.replace(
@@ -128,151 +140,182 @@ export default function EmergencyDashboardPage() {
         return;
       }
 
-      // role check: only emergency_contact allowed here
-      // (read user doc once via getDoc could work; we’ll piggyback on links query too)
-      // If you want a strict role check, uncomment this block to fetch role first:
-      // const uref = doc(db, "users", user.uid);
-      // const usnap = await getDoc(uref);
-      // const role = normalizeRole(usnap.data()?.role);
-      // if (role !== "emergency_contact") { router.replace("/dashboard"); return; }
+      setUid(user.uid); // will trigger device registration effect below
 
-      // Query all links where this user is the emergency contact:
-      // Path pattern: /users/{mainUid}/emergency_contact/{emergencyUid}
-      const qLinks = query(
+      // --- Main subscription ---
+      // Listen for all links where this user is the emergency contact.
+      // NOTE: ensure your subcollection id matches exactly (e.g., "emergency_contacts" vs "emergency_contact")
+      const linksQuery = query(
         collectionGroup(db, "emergency_contact"),
         where("uid", "==", user.uid)
       );
 
-      linksUnsubRef.current = onSnapshot(
-        qLinks,
-        (snap) => {
-          // Build base cards from link docs
-          const next: Record<string, PatientCard> = {};
-          const seenPatientIds: string[] = [];
+      unsubsRef.current.links = onSnapshot(
+        linksQuery,
+        (linksSnap) => {
+          firstLinksSnapSeenRef.current = true;
 
-          snap.docs.forEach((d) => {
-            const data = d.data() as any;
-            const patientUid = data.userId || d.ref.parent.parent?.id || "";
-            if (!patientUid) return;
+          const nextMainUserIds = new Set<string>();
+          const nextLinkInfo: Record<string, { name: string; avatar?: string; location?: string }> =
+            {};
 
-            const name = data.mainUserName || data.patientName || "Patient";
-            const avatar = data.mainUserAvatar || "";
-            next[patientUid] = {
-              patientUid,
-              name,
-              avatar: avatar || "https://placehold.co/100x100.png",
-              initials: initialsOf(name),
-              status: "OK", // will be refined by per-patient doc
-              lastCheckIn: "—",
-              location: data.location || "",
-            };
-            seenPatientIds.push(patientUid);
+          linksSnap.forEach((linkDoc) => {
+            const data = linkDoc.data() as any;
+
+            // Prefer explicit mainUserId; fallback to parent user id if structured that way.
+            const parentId = linkDoc.ref.parent.parent?.id || "";
+            const mainUserUid: string = data.mainUserId || parentId;
+            if (!mainUserUid) return;
+
+            const name: string = data.mainUserName || "Main User";
+            const avatar: string | undefined = data.mainUserAvatar;
+            const location: string | undefined = data.location;
+
+            nextMainUserIds.add(mainUserUid);
+            nextLinkInfo[mainUserUid] = { name, avatar, location };
           });
 
-          // Unsubscribe removed patients
-          Object.keys(perPatientUnsubsRef.current).forEach((id) => {
-            if (!seenPatientIds.includes(id)) {
-              perPatientUnsubsRef.current[id]();
-              delete perPatientUnsubsRef.current[id];
+          // Rebuild link cache to include only current ids (removes stale)
+          const rebuilt: Record<string, { name: string; avatar?: string; location?: string }> = {};
+          nextMainUserIds.forEach((id) => {
+            rebuilt[id] = nextLinkInfo[id] || linkInfoRef.current[id] || { name: "Main User" };
+          });
+          linkInfoRef.current = rebuilt;
+
+          // Unsubscribe from main users who are no longer linked
+          Object.keys(unsubsRef.current).forEach((subId) => {
+            if (subId !== "links" && !nextMainUserIds.has(subId)) {
+              unsubsRef.current[subId]();
+              delete unsubsRef.current[subId];
             }
           });
 
-          // Subscribe to each patient’s main user doc to derive status
-          seenPatientIds.forEach((pid) => {
-            if (perPatientUnsubsRef.current[pid]) return; // already listening
-            const uref = doc(db, "users", pid);
-            perPatientUnsubsRef.current[pid] = onSnapshot(
-              uref,
-              (usnap) => {
-                const base = next[pid] || { patientUid: pid, name: "Patient", initials: "PT" };
-                if (!usnap.exists()) {
-                  // keep base card
-                  setPatients((prev) => {
-                    const map = new Map(prev.map((p) => [p.patientUid, p]));
-                    map.set(pid, base);
-                    return Array.from(map.values());
-                  });
-                  return;
-                }
-
-                const udata = usnap.data() as MainUserDoc;
-                const last = udata.lastCheckinAt instanceof Timestamp ? udata.lastCheckinAt.toDate() : undefined;
-                const rawInt = udata.checkinInterval;
-                const intervalMin =
-                  typeof rawInt === "number"
-                    ? rawInt
-                    : typeof rawInt === "string"
-                    ? parseInt(rawInt, 10)
-                    : 12 * 60; // default 12h
-
-                // derive status
-                let status: Status = "OK";
-                if (udata.sosTriggeredAt instanceof Timestamp) {
-                  status = "SOS";
-                } else if (last) {
-                  const nextDue = last.getTime() + intervalMin * 60 * 1000;
-                  if (Date.now() > nextDue) status = "Inactive";
-                } else {
-                  // no check-ins yet → treat as Inactive to surface attention
-                  status = "Inactive";
-                }
-
-                const location = udata.lastLocationText || base.location;
-
-                const updated: PatientCard = {
-                  ...base,
-                  status,
-                  lastCheckIn: formatWhen(last),
-                  location,
-                };
-
-                setPatients((prev) => {
-                  const map = new Map(prev.map((p) => [p.patientUid, p]));
-                  map.set(pid, updated);
-                  // also ensure we include any cards from the latest links snapshot (next)
-                  Object.values(next).forEach((row) => {
-                    if (!map.has(row.patientUid)) map.set(row.patientUid, row);
-                  });
-                  // stable order by name
-                  return Array.from(map.values()).sort((a, b) =>
-                    a.name.localeCompare(b.name)
-                  );
-                });
-              },
-              (err) => {
-                console.error("[Emergency Dashboard] user doc listen error:", err);
-              }
-            );
-          });
-
-          // Seed UI quickly with link info while per-patient listeners attach
-          setPatients((prev) => {
-            const map = new Map(prev.map((p) => [p.patientUid, p]));
-            Object.values(next).forEach((row) => {
-              if (!map.has(row.patientUid)) map.set(row.patientUid, row);
+          // Seed/update UI from link info immediately
+          setMainUsers((prev) => {
+            const map = new Map(prev.map((u) => [u.mainUserUid, u]));
+            nextMainUserIds.forEach((id) => {
+              const link = linkInfoRef.current[id];
+              const existing = map.get(id);
+              const name = link?.name || existing?.name || "Main User";
+              map.set(id, {
+                mainUserUid: id,
+                name,
+                avatar: link?.avatar || existing?.avatar || "https://placehold.co/100x100.png",
+                initials: initialsOf(name),
+                status: existing?.status,
+                lastCheckIn: existing?.lastCheckIn,
+                location: link?.location ?? existing?.location ?? "",
+              });
+            });
+            // remove cards for users no longer linked
+            Array.from(map.keys()).forEach((id) => {
+              if (!nextMainUserIds.has(id)) map.delete(id);
             });
             return Array.from(map.values()).sort((a, b) => a.name.localeCompare(b.name));
           });
 
+          if (nextMainUserIds.size === 0) {
+            setLoading(false);
+            return;
+          }
+
+          // Subscribe to each linked main user's doc for live status
+          nextMainUserIds.forEach((mainUserId) => {
+            if (unsubsRef.current[mainUserId]) return;
+
+            const userDocRef = doc(db, "users", mainUserId);
+            unsubsRef.current[mainUserId] = onSnapshot(
+              userDocRef,
+              (userDocSnap) => {
+                const link = linkInfoRef.current[mainUserId] || { name: "Main User" };
+                const baseName = link.name;
+                const baseCard: MainUserCard = {
+                  mainUserUid: mainUserId,
+                  name: baseName,
+                  avatar: link.avatar || "https://placehold.co/100x100.png",
+                  initials: initialsOf(baseName),
+                  location: link.location || "",
+                };
+
+                let updatedCard = { ...baseCard };
+
+                if (userDocSnap.exists()) {
+                  const userData = userDocSnap.data() as MainUserDoc;
+                  const last =
+                    userData.lastCheckinAt instanceof Timestamp
+                      ? userData.lastCheckinAt.toDate()
+                      : undefined;
+
+                  const rawInt = userData.checkinInterval;
+                  const intervalMin =
+                    typeof rawInt === "number"
+                      ? rawInt
+                      : rawInt
+                      ? parseInt(String(rawInt), 10)
+                      : 12 * 60;
+
+                  let status: Status = "OK";
+                  if (userData.sosTriggeredAt instanceof Timestamp) {
+                    status = "SOS";
+                  } else if (last) {
+                    const nextDue = last.getTime() + intervalMin * 60 * 1000;
+                    if (Date.now() > nextDue) status = "Inactive";
+                  } else {
+                    status = "Inactive";
+                  }
+
+                  updatedCard = {
+                    ...baseCard,
+                    status,
+                    lastCheckIn: formatWhen(last),
+                    location: userData.location || baseCard.location,
+                  };
+
+                  // (Optional) If the main user doc carries a role and it's "primary", we keep as-is.
+                  // If somehow this emergency user has "primary" role, you could redirect them:
+                  // const role = normalizeRole(userData.role);
+                  // if (role === "primary") router.replace("/dashboard");
+                }
+
+                setMainUsers((prev) => {
+                  const map = new Map(prev.map((u) => [u.mainUserUid, u]));
+                  const existing = map.get(mainUserId);
+                  map.set(mainUserId, { ...existing, ...updatedCard });
+                  return Array.from(map.values()).sort((a, b) => a.name.localeCompare(b.name));
+                });
+
+                setLoading(false);
+              },
+              (error) => {
+                console.error("[Emergency Dashboard] User doc listen failed:", error);
+                setLoading(false);
+              }
+            );
+          });
+
           setLoading(false);
         },
-        (err) => {
-          console.error("[Emergency Dashboard] links onSnapshot error:", err);
+        (error) => {
+          console.error("[Emergency Dashboard] Main links query failed:", error);
           setLoading(false);
         }
       );
     });
 
     return () => {
-      if (linksUnsubRef.current) {
-        linksUnsubRef.current();
-        linksUnsubRef.current = null;
-      }
-      Object.values(perPatientUnsubsRef.current).forEach((f) => f());
-      perPatientUnsubsRef.current = {};
       unsubAuth();
+      Object.values(unsubsRef.current).forEach((unsub) => unsub());
+      unsubsRef.current = {};
+      linkInfoRef.current = {};
+      firstLinksSnapSeenRef.current = false;
     };
   }, [router]);
+
+  // ✅ Register THIS device for push on the emergency dashboard
+  useEffect(() => {
+    if (!uid) return;
+    registerDevice(uid, "emergency"); // users/{uid}/devices/{deviceId} with role = "emergency"
+  }, [uid]);
 
   const handleAcknowledge = (userName: string) => {
     toast({
@@ -290,16 +333,14 @@ export default function EmergencyDashboardPage() {
         </h1>
 
         {loading && <p>Loading your people…</p>}
-        {!loading && patients.length === 0 && (
-          <p className="opacity-70">
-            No linked users yet. Ask them to send you an invite.
-          </p>
+        {!loading && mainUsers.length === 0 && (
+          <p className="opacity-70">No linked users yet. Ask them to send you an invite.</p>
         )}
 
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-          {patients.map((p) => (
+          {mainUsers.map((p) => (
             <Card
-              key={p.patientUid}
+              key={p.mainUserUid}
               className={`shadow-lg hover:shadow-xl transition-shadow ${
                 p.status === "SOS" ? "border-destructive bg-destructive/10" : ""
               }`}

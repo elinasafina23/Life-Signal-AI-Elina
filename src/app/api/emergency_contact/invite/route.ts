@@ -1,127 +1,168 @@
 // src/app/api/emergency_contact/invite/route.ts
-import { NextRequest, NextResponse } from 'next/server';
-import crypto from 'crypto';
-import { Timestamp } from 'firebase-admin/firestore';
-import { db, adminAuth } from '@/lib/firebaseAdmin';
-import { normalizeRole, isMainUserRole, Role } from '@/lib/roles';
+import { NextRequest, NextResponse } from "next/server";
+import { FieldValue } from "firebase-admin/firestore";
+import crypto from "crypto";
+import { db, adminAuth } from "@/lib/firebaseAdmin";
+import { normalizeRole, isMainUserRole } from "@/lib/roles";
+
+function normalizeEmail(e?: string | null) {
+  const v = (e || "").trim().toLowerCase();
+  const [local = "", domain = ""] = v.split("@");
+  if (domain === "gmail.com" || domain === "googlemail.com") {
+    const clean = local.split("+")[0].replace(/\./g, "");
+    return `${clean}@gmail.com`;
+  }
+  return v;
+}
 
 async function requireMainUser(req: NextRequest) {
-  const cookie = req.cookies.get('__session')?.value || '';
-  if (!cookie) throw new Error('UNAUTHENTICATED');
+  const cookie = req.cookies.get("__session")?.value || "";
+  if (!cookie) throw new Error("UNAUTHENTICATED");
+  let decoded;
+  try {
+    decoded = await adminAuth.verifySessionCookie(cookie, true);
+  } catch {
+    throw new Error("UNAUTHENTICATED");
+  }
 
-  const decoded = await adminAuth.verifySessionCookie(cookie, true);
   const userSnap = await db.doc(`users/${decoded.uid}`).get();
-  const data = userSnap.data() as { role?: string; email?: string } | undefined;
+  const role = normalizeRole((userSnap.data() as any)?.role);
+  if (!isMainUserRole(role)) throw new Error("NOT_AUTHORIZED");
 
-  const role = normalizeRole(data?.role);
-  if (!isMainUserRole(role)) throw new Error('NOT_AUTHORIZED');
-
-  const email = data?.email || (decoded as any)?.email || '';
-  return { uid: decoded.uid, email };
+  return { uid: decoded.uid as string };
 }
+
+function getOrigin(req: NextRequest) {
+  return (
+    process.env.APP_ORIGIN ||
+    process.env.NEXT_PUBLIC_APP_ORIGIN ||
+    new URL(req.url).origin
+  );
+}
+
+const INVITE_TTL_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
 
 export async function POST(req: NextRequest) {
   try {
     const { uid: mainUserId } = await requireMainUser(req);
-    const { email, name, relation } = await req.json();
+    const body = await req.json().catch(() => ({} as any));
 
-    const targetEmail = String(email ?? '').toLowerCase().trim();
-    if (!targetEmail) {
-      return NextResponse.json({ error: 'Email required' }, { status: 400 });
+    const email = body?.email as string | undefined;
+    const name = (body?.name as string | undefined) || null;
+    const relation = (body?.relation as string | undefined) ?? "primary";
+
+    const emergencyContactEmail = normalizeEmail(String(email ?? ""));
+    if (!emergencyContactEmail) {
+      return NextResponse.json({ error: "Email required" }, { status: 400 });
     }
 
-    // Idempotency: one pending/active link per main_user + email
-    const careTeamId = `${mainUserId}_${targetEmail}`;
-    const careTeamRef = db.doc(`careTeams/${careTeamId}`);
-    const existing = await careTeamRef.get();
-    if (existing.exists) {
-      const status = existing.get('status');
-      if (status === 'ACTIVE' || status === 'PENDING') {
-        return NextResponse.json({ ok: true, alreadyInvited: true }, { status: 200 });
-      }
-    }
+    // Deterministic per (mainUserId, email) doc to track status
+    const emergencyContactId = `${mainUserId}_${emergencyContactEmail}`;
+    const emergencyContactRef = db.doc(`emergencyContacts/${emergencyContactId}`);
+    const ecSnap = await emergencyContactRef.get();
+    const ecStatus = ecSnap.exists ? (ecSnap.get("status") as string) : undefined;
 
-    // Create token (+ optional hash for server-side auditing)
-    const token = crypto.randomBytes(32).toString('hex');
-    const tokenHash = crypto.createHash('sha256').update(token).digest('hex');
-    const now = Timestamp.now();
-    const expiresAt = Timestamp.fromDate(new Date(Date.now() + 1000 * 60 * 60 * 24 * 7)); // 7 days
-
-    // Write invite + pending careTeam + optional contact record
-    const batch = db.batch();
-
-    // Invite document (matches your /emergency_contact/accept page expectations)
-    const inviteRef = db.collection('invites').doc();
-    batch.set(inviteRef, {
-      // identity
-      userId: mainUserId,                 // main_user uid
-      role: 'emergency_contact' as Role,
-
-      // recipient
-      emergencyEmail: targetEmail,        // canonical
-      caregiverEmail: targetEmail,        // backward-compat for older code
-
-      // tokening
-      token,                              // plain for client accept flow
-      tokenHash,                          // optional audit
-      status: 'pending',                  // your accept page checks this
-      createdAt: now,
-      acceptedAt: null,
-      expiresAt,
-
-      // display
-      name: name || null,
-      relation: relation || null,
-    });
-
-    // Optional: top-level care team record (idempotency + server use)
-    batch.set(careTeamRef, {
-      id: careTeamId,
-      patientId: mainUserId,              // keep field name if other code expects it
-      caregiverEmail: targetEmail,        // legacy-friendly
-      caregiverId: null,
-      status: 'PENDING',
-      createdAt: now,
-    });
-
-    // Optional: store a contact card under the main user
-    if (name || relation) {
-      const contactRef = db.collection(`users/${mainUserId}/emergencyContacts`).doc();
-      batch.set(contactRef, {
-        email: targetEmail,
-        name: name || '',
-        relation: relation || '',
-        invitedAt: now,
+    // If already linked/active, do not send another invite
+    if (ecStatus === "ACTIVE") {
+      return NextResponse.json({
+        ok: true,
+        alreadyLinked: true,
+        emergencyContactId,
       });
     }
 
+    // We now ALWAYS issue a fresh invite for PENDING (or missing) contacts.
+    // (Old code returned early and never sent a new link.)
+    let mainUserName = "";
+    let mainUserAvatar = "";
+    try {
+      const mu = await db.doc(`users/${mainUserId}`).get();
+      const m = mu.data() as any;
+      mainUserName = m?.displayName || "";
+      mainUserAvatar = m?.photoURL || "";
+    } catch {
+      // ignore
+    }
+
+    // Fresh token + 7-day expiry
+    const token = crypto.randomBytes(32).toString("hex");
+    const tokenHash = crypto.createHash("sha256").update(token).digest("hex");
+    const expiresAt = new Date(Date.now() + INVITE_TTL_MS);
+
+    const batch = db.batch();
+
+    // Create a NEW invite doc every time (distinct ID)
+    const inviteRef = db.collection("invites").doc();
+    batch.set(inviteRef, {
+      mainUserId: mainUserId,
+      role: "emergency_contact",
+      emergencyContactEmail,
+      relation,
+      status: "pending",
+      token,
+      tokenHash,
+      name,
+      mainUserName,
+      mainUserAvatar,
+      createdAt: FieldValue.serverTimestamp(),
+      acceptedAt: null,
+      expiresAt, // storing Date is fine in admin SDK
+    });
+
+    // Upsert/refresh the emergencyContact tracker doc
+    const resendCount = (ecSnap.exists ? ecSnap.get("resendCount") : 0) || 0;
+    const ecPayload: any = {
+      id: emergencyContactId,
+      mainUserId,
+      emergencyContactEmail,
+      status: "PENDING", // remains pending until accept route finalizes
+      lastInviteAt: FieldValue.serverTimestamp(),
+      resendCount: resendCount + 1,
+      updatedAt: FieldValue.serverTimestamp(),
+    };
+    if (!ecSnap.exists) {
+      ecPayload.createdAt = FieldValue.serverTimestamp();
+      ecPayload.emergencyContactUid = null;
+    }
+    batch.set(emergencyContactRef, ecPayload, { merge: true });
+
     await batch.commit();
 
-    // Accept URL for your client accept page
-    const origin = process.env.APP_ORIGIN ?? 'http://localhost:3000';
+    const origin = getOrigin(req);
     const acceptUrl = `${origin}/emergency_contact/accept?invite=${inviteRef.id}&token=${token}`;
+    // Optional: if you want to force email verification before accept, keep this:
+    const verifyContinue = `${origin}/verify-email?next=${encodeURIComponent(acceptUrl)}`;
 
-    // ---- Send email (Firebase Trigger Email extension) ----
-    // If you're NOT using the extension, replace this with your provider call.
-    await db.collection('mail').add({
-      to: [targetEmail],
+    // Send email via your Mail collection (kept from your original code)
+    await db.collection("mail").add({
+      to: [emergencyContactEmail],
       message: {
-        subject: 'You’ve been added as an emergency contact',
+        subject: "You’ve been added as an emergency contact",
         html: `
-          <p>Hello${name ? ' ' + name : ''},</p>
-          <p>You’ve been invited to be an <strong>emergency contact</strong>. Click the link below to accept:</p>
-          <p><a href="${acceptUrl}">${acceptUrl}</a></p>
-          <p>This link expires in 7 days.</p>
+          <p>Hello${name ? " " + name : ""},</p>
+          <p>You’ve been invited to be an <strong>emergency contact</strong>.</p>
+          <p><a href="${acceptUrl}">Accept invitation</a> (link expires in 7 days).</p>
+          <p>If the link doesn\'t work, copy this URL:<br>${acceptUrl}</p>
         `,
       },
     });
 
-    return NextResponse.json({ ok: true });
+    return NextResponse.json({
+      ok: true,
+      inviteId: inviteRef.id,
+      acceptUrl,
+      verifyContinue,
+      emergencyContactId,
+      wasResent: ecStatus === "PENDING" || !ecSnap.exists ? true : false,
+    });
   } catch (e: any) {
-    if (e?.message === 'UNAUTHENTICATED') return NextResponse.json({ error: 'Unauthenticated' }, { status: 401 });
-    if (e?.message === 'NOT_AUTHORIZED') return NextResponse.json({ error: 'Not authorized' }, { status: 403 });
-
+    if (e?.message === "UNAUTHENTICATED") {
+      return NextResponse.json({ error: "Unauthenticated" }, { status: 401 });
+    }
+    if (e?.message === "NOT_AUTHORIZED") {
+      return NextResponse.json({ error: "Not authorized" }, { status: 403 });
+    }
     console.error(e);
-    return NextResponse.json({ error: e?.message ?? 'Invite failed' }, { status: 400 });
+    return NextResponse.json({ error: e?.message ?? "Invite failed" }, { status: 400 });
   }
 }

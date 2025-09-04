@@ -1,32 +1,82 @@
-/**
- * Import function triggers from their respective submodules:
- *
- * import {onCall} from "firebase-functions/v2/https";
- * import {onDocumentWritten} from "firebase-functions/v2/firestore";
- *
- * See a full list of supported triggers at https://firebase.google.com/docs/functions
- */
-
-import {setGlobalOptions} from "firebase-functions";
-import {onRequest} from "firebase-functions/https";
+// functions/src/index.ts
+import * as admin from "firebase-admin";
+import { setGlobalOptions } from "firebase-functions/v2";
+import { onSchedule } from "firebase-functions/v2/scheduler";
 import * as logger from "firebase-functions/logger";
 
-// Start writing functions
-// https://firebase.google.com/docs/functions/typescript
-
-// For cost control, you can set the maximum number of containers that can be
-// running at the same time. This helps mitigate the impact of unexpected
-// traffic spikes by instead downgrading performance. This limit is a
-// per-function limit. You can override the limit for each function using the
-// `maxInstances` option in the function's options, e.g.
-// `onRequest({ maxInstances: 5 }, (req, res) => { ... })`.
-// NOTE: setGlobalOptions does not apply to functions using the v1 API. V1
-// functions should each use functions.runWith({ maxInstances: 10 }) instead.
-// In the v1 API, each function can only serve one request per container, so
-// this will be the maximum concurrent request count.
 setGlobalOptions({ maxInstances: 10 });
+if (!admin.apps.length) admin.initializeApp();
+const db = admin.firestore();
+const messaging = admin.messaging();
 
-// export const helloWorld = onRequest((request, response) => {
-//   logger.info("Hello logs!", {structuredData: true});
-//   response.send("Hello from Firebase!");
-// });
+function toMillis(raw: unknown): number {
+  if (typeof raw === "number") return raw < 1e12 ? raw * 1000 : raw;
+  if (raw && typeof (raw as admin.firestore.Timestamp).toMillis === "function") {
+    return (raw as admin.firestore.Timestamp).toMillis();
+  }
+  return 0;
+}
+
+function normalizeIntervalMs(v: unknown): number | null {
+  if (typeof v !== "number" || !isFinite(v) || v <= 0) return null;
+  if (v >= 3_600_000) return v;
+  if (v <= 48) return v * 60 * 60 * 1000;
+  return v * 60 * 1000;
+}
+function resolveIntervalMs(d: any): number {
+  return (
+    normalizeIntervalMs(d?.settings?.checkinInterval) ??
+    normalizeIntervalMs(d?.checkinInterval) ??
+    2 * 60 * 60 * 1000
+  );
+}
+
+export const checkMissedCheckins = onSchedule("every 15 minutes", async () => {
+  const now = Date.now();
+  const users = await db.collection("users").get();
+
+  for (const userDoc of users.docs) {
+    const data = userDoc.data();
+    const uid = userDoc.id;
+
+    const lastMs = toMillis(data.lastCheckinAt);
+    if (!lastMs) continue;
+
+    const intervalMs = resolveIntervalMs(data);
+    const due = now - lastMs > intervalMs;
+    if (!due) continue;
+
+    // Send to all device tokens
+    const devicesSnap = await userDoc.ref.collection("devices").get();
+    if (devicesSnap.empty) continue;
+
+    for (const dev of devicesSnap.docs) {
+      const { token } = dev.data() as { token?: string };
+      if (!token) continue;
+
+      try {
+        await messaging.send({
+          token,
+          notification: {
+            title: "Missed Check-In",
+            body: "You missed your last check-in. Please check in now!",
+          },
+          data: { userId: uid, type: "missed_checkin" },
+        });
+        logger.info(`✅ Sent to ${uid} device ${dev.id}`);
+      } catch (err: any) {
+        const code = err?.errorInfo?.code || err?.code;
+        logger.error(`❌ Send failed to ${uid}/${dev.id}`, err);
+
+        // Clean up invalid tokens
+        if (
+          code === "messaging/registration-token-not-registered" ||
+          code === "messaging/invalid-argument"
+        ) {
+          await dev.ref.delete();
+          logger.info(`🔧 Removed dead device ${dev.id} for ${uid}`);
+        }
+      }
+    }
+  }
+});

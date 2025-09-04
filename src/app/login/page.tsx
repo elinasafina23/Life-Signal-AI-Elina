@@ -8,28 +8,19 @@ import { zodResolver } from "@hookform/resolvers/zod";
 import * as z from "zod";
 import { Button } from "@/components/ui/button";
 import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-  CardFooter,
+  Card, CardContent, CardDescription, CardHeader, CardTitle, CardFooter,
 } from "@/components/ui/card";
 import {
-  Form,
-  FormControl,
-  FormField,
-  FormItem,
-  FormLabel,
-  FormMessage,
+  Form, FormControl, FormField, FormItem, FormLabel, FormMessage,
 } from "@/components/ui/form";
 import { Input } from "@/components/ui/input";
 import { Header } from "@/components/header";
 import { Footer } from "@/components/footer";
 import { useToast } from "@/hooks/use-toast";
 
-import { auth } from "@/firebase";
+import { auth, db } from "@/firebase";
 import { signInWithEmailAndPassword } from "firebase/auth";
+import { doc, getDoc } from "firebase/firestore";
 import { useState } from "react";
 import { normalizeRole, Role } from "@/lib/roles";
 
@@ -38,9 +29,19 @@ const loginSchema = z.object({
   password: z.string().min(1, { message: "Password is required." }),
 });
 
-function safeNext(n: string | null | undefined, role: Role) {
+function safeNext(n: string | null | undefined, fallbackRole: Role) {
   if (n && n.startsWith("/")) return n; // same-site only
-  return role === "emergency_contact" ? "/emergency-dashboard" : "/dashboard";
+  return fallbackRole === "emergency_contact" ? "/emergency-dashboard" : "/dashboard";
+}
+
+async function fetchActualRole(uid: string, fallback: Role): Promise<Role> {
+  try {
+    const snap = await getDoc(doc(db, "users", uid));
+    const r = snap.exists() ? (snap.data() as any).role : undefined;
+    return normalizeRole(r) ?? fallback;
+  } catch {
+    return fallback;
+  }
 }
 
 export default function LoginPage() {
@@ -49,9 +50,10 @@ export default function LoginPage() {
   const { toast } = useToast();
   const [isSubmitting, setIsSubmitting] = useState(false);
 
-  const role: Role = normalizeRole(params.get("role")) ?? "main_user";
+  // Query params we honor
+  const roleFromUrl: Role = normalizeRole(params.get("role")) ?? "main_user";
   const token = params.get("token") || ""; // optional invite token
-  const next = safeNext(params.get("next"), role);
+  const explicitNext = params.get("next"); // may be null/invalid
 
   const form = useForm<z.infer<typeof loginSchema>>({
     resolver: zodResolver(loginSchema),
@@ -72,7 +74,7 @@ export default function LoginPage() {
   };
 
   const maybeAutoAcceptInvite = async () => {
-    if (role !== "emergency_contact" || !token) return;
+    if (!token) return;
     try {
       await fetch("/api/emergency_contact/accept", {
         method: "POST",
@@ -81,7 +83,7 @@ export default function LoginPage() {
         body: JSON.stringify({ token }),
       });
     } catch {
-      // non-fatal: they can still accept from verify-email or accept page
+      // Non-fatal; verify-email/accept page can still handle it later
     }
   };
 
@@ -95,18 +97,22 @@ export default function LoginPage() {
         values.password
       );
 
-      // 🔐 Mint server session cookie so API routes are authorized
+      // Authorize API routes
       await setSessionCookie();
 
-      // Optional: if they arrived with an invite token, accept it now
+      // Try to accept invite token if present
       await maybeAutoAcceptInvite();
+
+      // Resolve final role (from Firestore) and destination
+      const actualRole = await fetchActualRole(user.uid, roleFromUrl);
+      const destination = safeNext(explicitNext, actualRole);
 
       toast({
         title: "Login Successful",
         description: `Welcome back, ${user.email ?? "user"}!`,
       });
 
-      router.replace(next);
+      router.replace(destination);
     } catch (err: any) {
       const code = err?.code as string | undefined;
       let message = "Something went wrong. Please try again.";
@@ -121,6 +127,9 @@ export default function LoginPage() {
     }
   };
 
+  // Precompute the link to signup (preserve role/next/token safely)
+  const signupNext = safeNext(explicitNext, roleFromUrl);
+
   return (
     <div className="flex flex-col min-h-screen bg-background">
       <Header />
@@ -129,7 +138,7 @@ export default function LoginPage() {
           <CardHeader className="text-center">
             <CardTitle className="text-3xl font-headline">Welcome Back!</CardTitle>
             <CardDescription>
-              {role === "emergency_contact"
+              {roleFromUrl === "emergency_contact"
                 ? "Sign in as an emergency contact"
                 : "Sign in to continue to LifeSignal AI"}
             </CardDescription>
@@ -182,8 +191,10 @@ export default function LoginPage() {
                 <p className="text-center text-sm text-muted-foreground">
                   New to LifeSignal?{" "}
                   <Link
-                    href={`/signup?role=${encodeURIComponent(role)}&next=${encodeURIComponent(
-                      next
+                    href={`/signup?role=${encodeURIComponent(
+                      roleFromUrl
+                    )}&next=${encodeURIComponent(
+                      signupNext
                     )}${token ? `&token=${encodeURIComponent(token)}` : ""}`}
                     className="font-semibold text-primary hover:underline"
                   >

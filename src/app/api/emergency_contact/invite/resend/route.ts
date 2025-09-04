@@ -1,10 +1,10 @@
+// src/app/api/emergency_contact/resend/route.ts
 import { NextRequest, NextResponse } from "next/server";
+import { FieldValue } from "firebase-admin/firestore";
 import crypto from "crypto";
-import { Timestamp } from "firebase-admin/firestore";
 import { db, adminAuth } from "@/lib/firebaseAdmin";
-import { normalizeRole, isMainUserRole, Role } from "@/lib/roles";
+import { normalizeRole, isMainUserRole } from "@/lib/roles";
 
-// --- helpers ---
 function normalizeEmail(e?: string | null) {
   const v = (e || "").trim().toLowerCase();
   const [local = "", domain = ""] = v.split("@");
@@ -18,92 +18,121 @@ function normalizeEmail(e?: string | null) {
 async function requireMainUser(req: NextRequest) {
   const cookie = req.cookies.get("__session")?.value || "";
   if (!cookie) throw new Error("UNAUTHENTICATED");
+  let decoded;
+  try {
+    decoded = await adminAuth.verifySessionCookie(cookie, true);
+  } catch {
+    throw new Error("UNAUTHENTICATED");
+  }
 
-  const decoded = await adminAuth.verifySessionCookie(cookie, true);
   const snap = await db.doc(`users/${decoded.uid}`).get();
-  const data = snap.data() as { role?: string } | undefined;
-
-  const role = normalizeRole(data?.role);
+  const role = normalizeRole((snap.data() as any)?.role);
   if (!isMainUserRole(role)) throw new Error("NOT_AUTHORIZED");
 
   return { uid: decoded.uid as string };
 }
 
-// --- route ---
+function getOrigin(req: NextRequest) {
+  return (
+    process.env.APP_ORIGIN ||
+    process.env.NEXT_PUBLIC_APP_ORIGIN ||
+    new URL(req.url).origin
+  );
+}
+
 export async function POST(req: NextRequest) {
   try {
     const { uid: mainUserId } = await requireMainUser(req);
-    const body = await req.json().catch(() => ({}));
-    const targetEmail = normalizeEmail(String(body?.email ?? ""));
-    const name = (body?.name as string | undefined) || null;
-    const relation = (body?.relation as string | undefined) || null;
+    const body = await req.json().catch(() => ({} as any));
 
-    if (!targetEmail) {
+    const email = body?.email as string | undefined;
+    const name = (body?.name as string | undefined) || null;
+    const relation = (body?.relation as string | undefined) ?? "primary";
+
+    const emergencyContactEmail = normalizeEmail(String(email ?? ""));
+    if (!emergencyContactEmail) {
       return NextResponse.json({ error: "Email required" }, { status: 400 });
     }
 
-    // Create a brand-new invite (no queries -> no composite index needed)
+    const emergencyContactId = `${mainUserId}_${emergencyContactEmail}`;
+    const emergencyContactRef = db.doc(`emergencyContacts/${emergencyContactId}`);
+    const ecSnap = await emergencyContactRef.get();
+
+    let mainUserName = "";
+    let mainUserAvatar = "";
+    try {
+      const mu = await db.doc(`users/${mainUserId}`).get();
+      const m = mu.data() as any;
+      mainUserName = m?.displayName || m?.name || "";
+      mainUserAvatar = m?.photoURL || m?.avatar || "";
+    } catch {}
+
     const token = crypto.randomBytes(32).toString("hex");
     const tokenHash = crypto.createHash("sha256").update(token).digest("hex");
-    const now = Timestamp.now();
-    const expiresAt = Timestamp.fromDate(
-      new Date(Date.now() + 7 * 24 * 60 * 60 * 1000)
-    );
+    const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
+
+    const batch = db.batch();
 
     const inviteRef = db.collection("invites").doc();
-    await inviteRef.set({
+    batch.set(inviteRef, {
       userId: mainUserId,
-      role: "emergency_contact" as Role,
-      emergencyEmail: targetEmail,      // canonical field
-      caregiverEmail: targetEmail,      // backward-compat for older code
+      role: "emergency_contact",
+      emergencyContactEmail,
+      relation,
+      status: "pending",
       token,
       tokenHash,
-      status: "pending",
-      createdAt: now,
+      name,
+      mainUserName,
+      mainUserAvatar,
+      createdAt: FieldValue.serverTimestamp(),
       acceptedAt: null,
       expiresAt,
-      name,
-      relation,
     });
 
-    // Keep a simple careTeam record up to date (optional, useful for UI)
-    const careTeamId = `${mainUserId}_${targetEmail}`;
-    await db.doc(`careTeams/${careTeamId}`).set(
-      {
-        id: careTeamId,
-        patientId: mainUserId,
-        caregiverEmail: targetEmail,
-        caregiverId: null,
-        status: "PENDING",
-        updatedAt: now,
-        createdAt: now,
-      },
-      { merge: true }
-    );
+    // Preserve ACTIVE status if already accepted; otherwise set/keep PENDING.
+    let nextStatus: "ACTIVE" | "PENDING" = "PENDING";
+    if (ecSnap.exists && ecSnap.get("status") === "ACTIVE") nextStatus = "ACTIVE";
 
-    // Build accept link
-    const origin =
-      process.env.APP_ORIGIN ??
-      process.env.NEXT_PUBLIC_APP_ORIGIN ??
-      "http://localhost:3000";
+    const ecPayload: any = {
+      id: emergencyContactId,
+      mainUserId,
+      emergencyContactEmail,
+      status: nextStatus,
+      updatedAt: FieldValue.serverTimestamp(),
+    };
+    if (!ecSnap.exists) {
+      ecPayload.createdAt = FieldValue.serverTimestamp();
+      ecPayload.emergencyContactUid = null;
+    }
+    batch.set(emergencyContactRef, ecPayload, { merge: true });
+
+    await batch.commit();
+
+    const origin = getOrigin(req);
     const acceptUrl = `${origin}/emergency_contact/accept?invite=${inviteRef.id}&token=${token}`;
+    const verifyContinue = `${origin}/verify-email?next=${encodeURIComponent(acceptUrl)}`;
 
-    // Send email using the Firebase Trigger Email extension
     await db.collection("mail").add({
-      to: [targetEmail],
+      to: [emergencyContactEmail],
       message: {
-        subject: "Your LifeSignal emergency contact invite",
+        subject: "You’ve been added as an emergency contact",
         html: `
           <p>Hello${name ? " " + name : ""},</p>
           <p>You’ve been invited to be an <strong>emergency contact</strong>.</p>
-          <p><a href="${acceptUrl}">Accept invitation</a></p>
-          <p>If the button doesn't work, copy this URL:<br>${acceptUrl}</p>
-          <p>This link expires in 7 days.</p>
+          <p><a href="${acceptUrl}">Accept invitation</a> (link expires in 7 days).</p>
+          <p>If the link doesn't work, copy this URL:<br>${acceptUrl}</p>
         `,
       },
     });
 
-    return NextResponse.json({ ok: true, inviteId: inviteRef.id });
+    return NextResponse.json({
+      ok: true,
+      inviteId: inviteRef.id,
+      acceptUrl,
+      verifyContinue,
+      emergencyContactId,
+    });
   } catch (e: any) {
     if (e?.message === "UNAUTHENTICATED") {
       return NextResponse.json({ error: "Unauthenticated" }, { status: 401 });
