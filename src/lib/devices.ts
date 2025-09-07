@@ -1,12 +1,12 @@
 'use client';
 
 import { messagingPromise, db } from '@/firebase';
-import { getToken, isSupported, type Messaging } from 'firebase/messaging';
+import { isSupported, getToken, type Messaging } from 'firebase/messaging';
 import { doc, setDoc, serverTimestamp, deleteDoc } from 'firebase/firestore';
-import type { User } from 'firebase/auth';
 
 const VAPID_KEY = process.env.NEXT_PUBLIC_FIREBASE_VAPID_KEY as string;
 
+// Stable id per browser install
 function getOrCreateDeviceId(): string {
   const KEY = 'deviceId';
   let id = localStorage.getItem(KEY);
@@ -17,16 +17,20 @@ function getOrCreateDeviceId(): string {
   return id;
 }
 
+// Ensure the SW is registered at root scope and is ACTIVE & controlling
 async function ensureSwRegistration(): Promise<ServiceWorkerRegistration | undefined> {
   if (!('serviceWorker' in navigator)) return;
 
+  // Prefer the registration that controls the page (root scope)
   let reg = await navigator.serviceWorker.getRegistration('/');
   if (!reg) {
     reg = await navigator.serviceWorker.register('/firebase-messaging-sw.js', { scope: '/' });
   }
 
+  // Wait for ACTIVATE + control
   await navigator.serviceWorker.ready;
 
+  // Extra safety: wait until this page is controlled
   if (!navigator.serviceWorker.controller) {
     await new Promise<void>((resolve) =>
       navigator.serviceWorker.addEventListener('controllerchange', () => resolve(), { once: true })
@@ -35,12 +39,11 @@ async function ensureSwRegistration(): Promise<ServiceWorkerRegistration | undef
   return reg;
 }
 
-/** Register/refresh this device's token under users/{uid}/devices/{deviceId} */
-export async function registerDevice(uid: string, role?: 'primary' | 'emergency') {
+export async function registerDevice(uid: string, role: 'primary' | 'emergency') {
   try {
     if (!VAPID_KEY) throw new Error('Missing NEXT_PUBLIC_FIREBASE_VAPID_KEY');
     if (!(await isSupported())) {
-      console.warn('Messaging not supported in this browser.');
+      console.warn('FCM not supported in this browser.');
       return;
     }
 
@@ -53,15 +56,15 @@ export async function registerDevice(uid: string, role?: 'primary' | 'emergency'
       return;
     }
 
-    const registration = await ensureSwRegistration();
-    if (!registration) throw new Error('Service Worker registration not available');
+    const reg = await ensureSwRegistration();
+    if (!reg) throw new Error('Service Worker registration not available');
 
     const token = await getToken(messaging, {
       vapidKey: VAPID_KEY,
-      serviceWorkerRegistration: registration,
+      serviceWorkerRegistration: reg,
     });
     if (!token) {
-      console.warn('Failed to get FCM token.');
+      console.warn('No FCM token returned.');
       return;
     }
 
@@ -70,33 +73,27 @@ export async function registerDevice(uid: string, role?: 'primary' | 'emergency'
       doc(db, 'users', uid, 'devices', deviceId),
       {
         token,
-        platform: 'web',
         role,
+        platform: 'web',
         ua: navigator.userAgent,
         updatedAt: serverTimestamp(),
       },
       { merge: true }
     );
 
-    console.log('✅ Saved FCM token for', uid, 'device', deviceId, 'role:', role);
-  } catch (error) {
-    console.error('Error registering device:', error);
+    console.log('✅ device registered:', uid, deviceId);
+  } catch (e) {
+    console.error('registerDevice failed', e);
   }
 }
 
-/** Optional: convenience wrapper if you sometimes have a User object */
-export async function saveFcmToken(user: User, role?: 'primary' | 'emergency') {
-  return registerDevice(user.uid, role);
-}
-
-/** Optional: call on sign-out to remove this device doc */
 export async function unregisterDevice(uid: string) {
   try {
     const deviceId = localStorage.getItem('deviceId');
     if (!deviceId) return;
     await deleteDoc(doc(db, 'users', uid, 'devices', deviceId));
-    console.log('🗑️ Removed device', deviceId, 'for', uid);
-  } catch (error) {
-    console.error('Error unregistering device:', error);
+    console.log('🗑️ device unregistered:', deviceId);
+  } catch (e) {
+    console.error('unregisterDevice failed', e);
   }
 }

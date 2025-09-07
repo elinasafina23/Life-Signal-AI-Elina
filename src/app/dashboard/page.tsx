@@ -71,6 +71,44 @@ export default function DashboardPage() {
   const userDocUnsubRef = useRef<(() => void) | null>(null);
   const userRef = useRef<ReturnType<typeof doc> | null>(null);
 
+// Show OS banner even when the tab is focused
+useEffect(() => {
+  let unsub: (() => void) | undefined;
+
+  (async () => {
+    const { isSupported, getMessaging, onMessage } = await import('firebase/messaging');
+    if (!(await isSupported())) return;
+
+    // reuse your initialized app via dynamic import of your firebase module
+    const { initializeApp, getApps } = await import('firebase/app');
+    const apps = getApps();
+    const app = apps.length
+      ? apps[0]
+      : initializeApp({
+          apiKey: process.env.NEXT_PUBLIC_FIREBASE_API_KEY!,
+          authDomain: process.env.NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN!,
+          projectId: process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID!,
+          messagingSenderId: process.env.NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID!,
+          appId: process.env.NEXT_PUBLIC_FIREBASE_APP_ID!,
+        });
+
+    const messaging = getMessaging(app);
+
+    unsub = onMessage(messaging, async (payload) => {
+      const reg = await navigator.serviceWorker.ready;
+      const title = payload.notification?.title || payload.data?.title || 'Notification';
+      const body  = payload.notification?.body  || payload.data?.body  || '';
+      const url   = payload.fcmOptions?.link    || payload.data?.url    || '/';
+      reg.showNotification(title, { body, data: { url } });
+    });
+  })();
+
+  return () => unsub?.();
+}, []);
+
+
+
+
   // Auth + Firestore subscription
   useEffect(() => {
     const offAuth = onAuthStateChanged(auth, async (user) => {

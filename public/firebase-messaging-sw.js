@@ -1,11 +1,10 @@
 /* public/firebase-messaging-sw.js */
+/* v1 */
 
-// Load Firebase compat libs in the SW context
-importScripts("https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js");
-importScripts("https://www.gstatic.com/firebasejs/10.12.2/firebase-messaging-compat.js");
+importScripts('https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js');
+importScripts('https://www.gstatic.com/firebasejs/10.12.2/firebase-messaging-compat.js');
 
-// IMPORTANT: process.env.* is NOT available in a static SW file.
-// Put your actual config values here (same as your client app).
+// Use real values (same as your client app)
 firebase.initializeApp({
   apiKey: "AIzaSyBNCJcAtvkcjGXDonftIIS7mJ8rywAijT8",
   authDomain: "life-signal-ai-9caf4.firebaseapp.com",
@@ -13,42 +12,63 @@ firebase.initializeApp({
   storageBucket: "life-signal-ai-9caf4.appspot.com",
   messagingSenderId: "1021508781728",
   appId: "1:1021508781728:web:ec0a2e771d0ff633ff6bc5",
-  // measurementId is not required for messaging in the SW
 });
+
+// Take over immediately so the page is controlled after next load
+self.addEventListener('install', () => self.skipWaiting());
+self.addEventListener('activate', (e) => e.waitUntil(self.clients.claim()));
 
 const messaging = firebase.messaging();
 
-// Background messages:
-// If your server payload includes a `notification` block,
-// most browsers will auto-display it and this handler may NOT run.
-// This handler is mainly for data-only messages.
-messaging.onBackgroundMessage((payload) => {
-  // Prefer notification fields if present; otherwise fall back to data.
-  const title =
-    payload?.notification?.title ||
-    payload?.data?.title ||
-    "New Notification";
+/**
+ * FCM background handler (mostly for data-only messages).
+ * If your payload includes a top-level `notification`, most browsers
+ * will auto-display and this may not run—that’s normal.
+ */
+messaging.onBackgroundMessage((payload = {}) => {
+  const n = payload.notification || {};
+  const d = payload.data || {};
 
+  const title = n.title || d.title || 'New Notification';
   const options = {
-    body: payload?.notification?.body || payload?.data?.body || "",
-    icon: "/icons/icon-192.png", // optional PWA icon path
-    data: payload?.data || {},
+    body: n.body || d.body || '',
+    icon: '/icon-192x192.png',     // make sure this file exists in /public
+    data: { url: d.url || '/', ...d },
   };
 
   self.registration.showNotification(title, options);
 });
 
-// Optional: bring your app to the foreground when the notif is clicked
-self.addEventListener("notificationclick", (event) => {
-  event.notification.close();
-  const urlToOpen = event.notification.data?.url || "/";
+/**
+ * Fallback for generic Web Push or unusual payloads.
+ * Ensures a notification still shows even if the compat handler doesn't fire.
+ */
+self.addEventListener('push', (event) => {
+  let p = {};
+  try { p = event.data?.json?.() || {}; } catch {}
+  // Browser will auto-display top-level notification payloads.
+  if (p.notification) return;
 
-  event.waitUntil(
-    (async () => {
-      const allClients = await clients.matchAll({ type: "window", includeUncontrolled: true });
-      const client = allClients.find((c) => new URL(c.url).pathname === new URL(urlToOpen, self.location.origin).pathname);
-      if (client) return client.focus();
-      return clients.openWindow(urlToOpen);
-    })()
-  );
+  const d = p.data || {};
+  const title = d.title || 'Notification';
+  const options = { body: d.body || '', icon: '/icon-192x192.png', data: { url: d.url || '/' } };
+  event.waitUntil(self.registration.showNotification(title, options));
+});
+
+// Focus an existing tab with the same path, or open a new one
+self.addEventListener('notificationclick', (event) => {
+  event.notification.close();
+  const urlToOpen = event.notification.data?.url || '/';
+
+  event.waitUntil((async () => {
+    const all = await clients.matchAll({ type: 'window', includeUncontrolled: true });
+    const targetPath = new URL(urlToOpen, self.location.origin).pathname;
+
+    for (const c of all) {
+      try {
+        if (new URL(c.url).pathname === targetPath) return c.focus();
+      } catch {}
+    }
+    return clients.openWindow(urlToOpen);
+  })());
 });
