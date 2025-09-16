@@ -14,6 +14,7 @@ import {
   query,
   where,
   doc,
+  getDoc,
   Timestamp,
 } from "firebase/firestore";
 
@@ -33,9 +34,8 @@ import { Badge } from "@/components/ui/badge";
 import { MapPin, Phone, MessageSquare } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 
-// ✅ import device registration (with role tagging)
+// Push registration + roles
 import { registerDevice } from "@/lib/useFcmToken";
-// (Optional) if you store role on emergency-contact users, you can gate/redirect:
 import { normalizeRole } from "@/lib/roles";
 
 type Status = "OK" | "Inactive" | "SOS";
@@ -55,7 +55,7 @@ type MainUserDoc = {
   checkinInterval?: number | string; // minutes
   sosTriggeredAt?: Timestamp;
   location?: string;
-  role?: string; // optional if you mirror role here
+  role?: string;
 };
 
 function initialsOf(name = "") {
@@ -110,41 +110,52 @@ export default function EmergencyDashboardPage() {
   const [loading, setLoading] = useState(true);
   const [uid, setUid] = useState<string | null>(null);
 
-  // keep latest Firestore unsubscribes (links + per-user by id)
+  // Track Firestore unsubscribers
   const unsubsRef = useRef<Record<string, () => void>>({});
 
-  // cache the latest link info so user-doc listeners always merge with fresh base data
+  // Cache link info (names/avatars/locations) so user-doc listeners can merge nicely
   const linkInfoRef = useRef<
     Record<string, { name: string; avatar?: string; location?: string }>
   >({});
 
-  // gate: only clear loading after the first links snapshot arrives
-  const firstLinksSnapSeenRef = useRef(false);
-
   useEffect(() => {
-    // Main auth subscription
-    const unsubAuth = onAuthStateChanged(auth, (user) => {
-      // clean up all old listeners
-      Object.values(unsubsRef.current).forEach((unsub) => unsub());
+    // Auth & role gate
+    const unsubAuth = onAuthStateChanged(auth, async (user) => {
+      // Cleanup any previous listeners when auth state flips
+      Object.values(unsubsRef.current).forEach((fn) => fn());
       unsubsRef.current = {};
       linkInfoRef.current = {};
-      firstLinksSnapSeenRef.current = false;
       setMainUsers([]);
-      setLoading(true);
       setUid(null);
 
       if (!user) {
+        setLoading(false);
         router.replace(
           `/login?role=emergency_contact&next=${encodeURIComponent("/emergency-dashboard")}`
         );
         return;
       }
 
-      setUid(user.uid); // will trigger device registration effect below
+      // Require role = emergency_contact
+      try {
+        const meSnap = await getDoc(doc(db, "users", user.uid));
+        const myRole = normalizeRole(meSnap.exists() ? (meSnap.data() as any).role : undefined);
+        if (myRole !== "emergency_contact") {
+          router.replace("/dashboard");
+          return;
+        }
+      } catch {
+        // If role can't be determined, be conservative and send to login
+        router.replace(
+          `/login?role=emergency_contact&next=${encodeURIComponent("/emergency-dashboard")}`
+        );
+        return;
+      }
 
-      // --- Main subscription ---
-      // Listen for all links where this user is the emergency contact.
-      // NOTE: ensure your subcollection id matches exactly (e.g., "emergency_contacts" vs "emergency_contact")
+      // Passed gate
+      setUid(user.uid);
+
+      // Listen for link docs where this user is the emergency contact
       const linksQuery = query(
         collectionGroup(db, "emergency_contact"),
         where("uid", "==", user.uid)
@@ -153,8 +164,6 @@ export default function EmergencyDashboardPage() {
       unsubsRef.current.links = onSnapshot(
         linksQuery,
         (linksSnap) => {
-          firstLinksSnapSeenRef.current = true;
-
           const nextMainUserIds = new Set<string>();
           const nextLinkInfo: Record<string, { name: string; avatar?: string; location?: string }> =
             {};
@@ -162,7 +171,7 @@ export default function EmergencyDashboardPage() {
           linksSnap.forEach((linkDoc) => {
             const data = linkDoc.data() as any;
 
-            // Prefer explicit mainUserId; fallback to parent user id if structured that way.
+            // Prefer stored mainUserId, fall back to parent doc id
             const parentId = linkDoc.ref.parent.parent?.id || "";
             const mainUserUid: string = data.mainUserId || parentId;
             if (!mainUserUid) return;
@@ -175,22 +184,22 @@ export default function EmergencyDashboardPage() {
             nextLinkInfo[mainUserUid] = { name, avatar, location };
           });
 
-          // Rebuild link cache to include only current ids (removes stale)
+          // Refresh link cache
           const rebuilt: Record<string, { name: string; avatar?: string; location?: string }> = {};
           nextMainUserIds.forEach((id) => {
             rebuilt[id] = nextLinkInfo[id] || linkInfoRef.current[id] || { name: "Main User" };
           });
           linkInfoRef.current = rebuilt;
 
-          // Unsubscribe from main users who are no longer linked
-          Object.keys(unsubsRef.current).forEach((subId) => {
-            if (subId !== "links" && !nextMainUserIds.has(subId)) {
-              unsubsRef.current[subId]();
-              delete unsubsRef.current[subId];
+          // Drop listeners for unlinked users
+          Object.keys(unsubsRef.current).forEach((k) => {
+            if (k !== "links" && !nextMainUserIds.has(k)) {
+              unsubsRef.current[k]();
+              delete unsubsRef.current[k];
             }
           });
 
-          // Seed/update UI from link info immediately
+          // Seed UI from link data right away
           setMainUsers((prev) => {
             const map = new Map(prev.map((u) => [u.mainUserUid, u]));
             nextMainUserIds.forEach((id) => {
@@ -207,7 +216,7 @@ export default function EmergencyDashboardPage() {
                 location: link?.location ?? existing?.location ?? "",
               });
             });
-            // remove cards for users no longer linked
+            // Remove cards for users no longer linked
             Array.from(map.keys()).forEach((id) => {
               if (!nextMainUserIds.has(id)) map.delete(id);
             });
@@ -219,7 +228,7 @@ export default function EmergencyDashboardPage() {
             return;
           }
 
-          // Subscribe to each linked main user's doc for live status
+          // Live subscribe to each linked main user's profile for status
           nextMainUserIds.forEach((mainUserId) => {
             if (unsubsRef.current[mainUserId]) return;
 
@@ -241,6 +250,7 @@ export default function EmergencyDashboardPage() {
 
                 if (userDocSnap.exists()) {
                   const userData = userDocSnap.data() as MainUserDoc;
+
                   const last =
                     userData.lastCheckinAt instanceof Timestamp
                       ? userData.lastCheckinAt.toDate()
@@ -270,11 +280,6 @@ export default function EmergencyDashboardPage() {
                     lastCheckIn: formatWhen(last),
                     location: userData.location || baseCard.location,
                   };
-
-                  // (Optional) If the main user doc carries a role and it's "primary", we keep as-is.
-                  // If somehow this emergency user has "primary" role, you could redirect them:
-                  // const role = normalizeRole(userData.role);
-                  // if (role === "primary") router.replace("/dashboard");
                 }
 
                 setMainUsers((prev) => {
@@ -304,17 +309,16 @@ export default function EmergencyDashboardPage() {
 
     return () => {
       unsubAuth();
-      Object.values(unsubsRef.current).forEach((unsub) => unsub());
+      Object.values(unsubsRef.current).forEach((fn) => fn());
       unsubsRef.current = {};
       linkInfoRef.current = {};
-      firstLinksSnapSeenRef.current = false;
     };
   }, [router]);
 
-  // ✅ Register THIS device for push on the emergency dashboard
+  // Register this device for push notifications (as an emergency device)
   useEffect(() => {
     if (!uid) return;
-    registerDevice(uid, "emergency"); // users/{uid}/devices/{deviceId} with role = "emergency"
+    registerDevice(uid, "emergency");
   }, [uid]);
 
   const handleAcknowledge = (userName: string) => {

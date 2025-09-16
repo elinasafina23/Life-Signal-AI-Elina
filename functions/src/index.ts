@@ -18,15 +18,16 @@ function toEpochMinutes(ms: number): number {
 
 /**
  * Read interval in MINUTES and return a valid number.
- * Defaults to 720 (12h) when unset/invalid.
+ * 
  */
-function getIntervalMinutes(data: unknown): number {
-  const d = data as Record<string, unknown>;
-  const settings =
-    (d?.settings as Record<string, unknown> | undefined) ?? {};
-  let minutes = Number(settings.checkinInterval ?? d?.checkinInterval ?? 720);
-  if (!Number.isFinite(minutes) || minutes <= 0) minutes = 720;
-  return minutes;
+function getIntervalMinutes(data: FirebaseFirestore.DocumentData): number {
+  // Expect checkinInterval to be stored directly on the user doc
+  const raw = data?.checkinInterval;
+  const minutes = Number(raw);
+
+  // If valid positive number → use it
+  // Else fallback to 12 hours (720 minutes)
+  return Number.isFinite(minutes) && minutes > 0 ? minutes : 720;
 }
 
 /**
