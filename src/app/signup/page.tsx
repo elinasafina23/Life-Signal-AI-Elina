@@ -49,9 +49,11 @@ const passwordValidation = z
   .regex(/[0-9]/, { message: "Password must contain at least one number." })
   .regex(/[^a-zA-Z0-9]/, { message: "Password must contain at least one special character." });
 
+// Zod schema updated to include separate firstName and lastName fields.
 const signupSchema = z
   .object({
-    name: z.string().min(2, { message: "Name must be at least 2 characters." }),
+    firstName: z.string().min(2, { message: "First name must be at least 2 characters." }),
+    lastName: z.string().min(2, { message: "Last name must be at least 2 characters." }),
     email: z.string().email({ message: "Please enter a valid email." }),
     password: passwordValidation,
     confirmPassword: z.string(),
@@ -66,24 +68,20 @@ export default function SignupPage() {
   const params = useSearchParams();
   const { toast } = useToast();
 
-  // Role + optional invite token
   const role: Role = normalizeRole(params.get("role")) ?? "main_user";
   const token = params.get("token") || null;
 
-  // Sanitize "next": allow same-site paths only; treat "/" as unset
   const rawNext = params.get("next");
   const next = useMemo(() => {
     const n = rawNext && rawNext.startsWith("/") ? rawNext : "";
     return n === "/" ? "" : n;
   }, [rawNext]);
 
-  // Base origin for action code settings
   const appOrigin =
     typeof window === "undefined"
       ? process.env.NEXT_PUBLIC_APP_ORIGIN || ""
       : window.location.origin;
 
-  // Continue URL for email verification; include role/fromHosted and only meaningful params
   const continueUrl = useMemo(() => {
     const q = new URLSearchParams({
       role,
@@ -97,9 +95,10 @@ export default function SignupPage() {
   const [passwordStrength, setPasswordStrength] = useState(0);
   const [isSubmitting, setIsSubmitting] = useState(false);
 
+  // Default values updated to include firstName and lastName.
   const form = useForm<z.infer<typeof signupSchema>>({
     resolver: zodResolver(signupSchema),
-    defaultValues: { name: "", email: "", password: "", confirmPassword: "" },
+    defaultValues: { firstName: "", lastName: "", email: "", password: "", confirmPassword: "" },
   });
 
   const calculatePasswordStrength = (password: string) => {
@@ -119,30 +118,28 @@ export default function SignupPage() {
     try {
       setIsSubmitting(true);
 
-      // 1) Create auth user
       const cred = await createUserWithEmailAndPassword(
         auth,
         values.email.trim().toLowerCase(),
         values.password
       );
 
-      // 2) Set display name
-      await updateProfile(cred.user, { displayName: values.name });
+      // updateProfile now uses the combined first and last names.
+      await updateProfile(cred.user, { displayName: `${values.firstName} ${values.lastName}` });
 
-      // 3) Create/merge Firestore profile with canonical role
+      // setDoc now stores firstName and lastName separately.
       await setDoc(
         doc(db, "users", cred.user.uid),
         {
           uid: cred.user.uid,
-          name: values.name,
-          email: (cred.user.email || "").toLowerCase(),
-          role, // 'main_user' | 'emergency_contact'
+          firstName: values.firstName,
+          lastName: values.lastName,
+          role,
           createdAt: serverTimestamp(),
         },
         { merge: true }
       );
 
-      // 4) Send verification email (hosted flow returns to /verify-email)
       try {
         await sendEmailVerification(cred.user, {
           url: continueUrl,
@@ -152,7 +149,6 @@ export default function SignupPage() {
         console.warn("sendEmailVerification failed:", e);
       }
 
-      // 5) Route to verify-email; include next/token only when present
       router.push(
         `/verify-email?email=${encodeURIComponent(values.email)}&role=${encodeURIComponent(role)}${
           next ? `&next=${encodeURIComponent(next)}` : ""
@@ -188,14 +184,30 @@ export default function SignupPage() {
           <Form {...form}>
             <form onSubmit={form.handleSubmit(onSubmit)}>
               <CardContent className="space-y-4">
+                {/* First Name field */}
                 <FormField
                   control={form.control}
-                  name="name"
+                  name="firstName"
                   render={({ field }) => (
                     <FormItem>
-                      <FormLabel>Full Name</FormLabel>
+                      <FormLabel>First Name</FormLabel>
                       <FormControl>
-                        <Input placeholder="John Doe" {...field} disabled={isSubmitting} />
+                        <Input placeholder="John" {...field} disabled={isSubmitting} />
+                      </FormControl>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
+
+                {/* Last Name field */}
+                <FormField
+                  control={form.control}
+                  name="lastName"
+                  render={({ field }) => (
+                    <FormItem>
+                      <FormLabel>Last Name</FormLabel>
+                      <FormControl>
+                        <Input placeholder="Doe" {...field} disabled={isSubmitting} />
                       </FormControl>
                       <FormMessage />
                     </FormItem>

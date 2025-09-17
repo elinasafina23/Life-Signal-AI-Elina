@@ -21,27 +21,15 @@ export default function Home() {
             and reliable safety for everyone.
           </p>
           <div className="flex flex-col md:flex-row justify-center gap-6 mb-10">
-  
-  {/* SIgnup Buttons */}
-  <Button
-    asChild
-    size="lg"
-    className="text-lg py-8 px-14 min-w-[260px]" 
-  >
-    <Link href="/signup">User Sign Up</Link>
-  </Button>
-
-  {/* Smaller secondary button */}
-  <Button
-    asChild
-    size="lg"
-    className="text-lg py-8 px-14 min-w-[260px]" 
-    variant="secondary"
-  >
-   <Link href="/signup/emergency-contact">Emergency Contact Sign Up</Link>
-  </Button>
-</div>
-          
+            {/* SIgnup Buttons */}
+            <Button
+              asChild
+              size="lg"
+              className="text-lg py-8 px-14 min-w-[260px]"
+            >
+              <Link href="/signup">Sign Up</Link>
+            </Button>
+          </div>
         </section>
 
         <section className="bg-secondary py-16 md:py-24">
@@ -111,7 +99,7 @@ export default function Home() {
             </div>
             <div className="rounded-lg overflow-hidden shadow-lg">
               <Image
-                src="https://placehold.co/600x400.png"
+                src="/images/image-600x400.png"
                 alt="Family using the app"
                 width={600}
                 height={400}
