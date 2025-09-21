@@ -1,10 +1,10 @@
 /* public/firebase-messaging-sw.js */
-/* v1 */
+/* v2 – routes clicks to /push-redirect so the app can auth-gate */
 
 importScripts('https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js');
 importScripts('https://www.gstatic.com/firebasejs/10.12.2/firebase-messaging-compat.js');
 
-// Use real values (same as your client app)
+// Your Firebase web config (ok to expose in client/SW)
 firebase.initializeApp({
   apiKey: "AIzaSyBNCJcAtvkcjGXDonftIIS7mJ8rywAijT8",
   authDomain: "life-signal-ai-9caf4.firebaseapp.com",
@@ -14,61 +14,86 @@ firebase.initializeApp({
   appId: "1:1021508781728:web:ec0a2e771d0ff633ff6bc5",
 });
 
-// Take over immediately so the page is controlled after next load
+// Take over as soon as possible
 self.addEventListener('install', () => self.skipWaiting());
 self.addEventListener('activate', (e) => e.waitUntil(self.clients.claim()));
 
 const messaging = firebase.messaging();
 
+/** Build a neutral redirect URL the app can handle. */
+function buildRedirectUrl(data) {
+  const type = data?.type || "";      // "missed_checkin" | "missed_checkin_emergency"
+  const userId = data?.userId || "";  // the main user who missed
+  const deepLink = data?.deepLink || ""; // optional future use
+
+  const qs = new URLSearchParams();
+  if (type) qs.set("type", type);
+  if (userId) qs.set("userId", userId);
+  if (deepLink) qs.set("deepLink", deepLink);
+  return `/push-redirect?${qs.toString()}`;
+}
+
+/** Show a notification; always keep raw data so click handler can route. */
+function showNoti(title, body, data) {
+  return self.registration.showNotification(title || "Notification", {
+    body: body || "",
+    icon: "/icon-192x192.png", // make sure this exists in /public
+    data: data || {},          // preserve payload.data (contains type/userId)
+  });
+}
+
 /**
- * FCM background handler (mostly for data-only messages).
- * If your payload includes a top-level `notification`, most browsers
- * will auto-display and this may not run—that’s normal.
+ * Background handler for FCM (data-only or mixed payloads).
+ * If payload has a top-level notification, some browsers auto-display it.
  */
 messaging.onBackgroundMessage((payload = {}) => {
   const n = payload.notification || {};
   const d = payload.data || {};
-
-  const title = n.title || d.title || 'New Notification';
-  const options = {
-    body: n.body || d.body || '',
-    icon: '/icon-192x192.png',     // make sure this file exists in /public
-    data: { url: d.url || '/', ...d },
-  };
-
-  self.registration.showNotification(title, options);
+  const title = n.title || d.title || "Notification";
+  const body  = n.body  || d.body  || "";
+  // IMPORTANT: keep the original data; we compute redirect on click.
+  showNoti(title, body, d);
 });
 
 /**
- * Fallback for generic Web Push or unusual payloads.
- * Ensures a notification still shows even if the compat handler doesn't fire.
+ * Generic Web Push fallback (when above doesn't fire).
  */
 self.addEventListener('push', (event) => {
   let p = {};
   try { p = event.data?.json?.() || {}; } catch {}
-  // Browser will auto-display top-level notification payloads.
+  // If browser already handled a top-level notification, do nothing.
   if (p.notification) return;
 
   const d = p.data || {};
-  const title = d.title || 'Notification';
-  const options = { body: d.body || '', icon: '/icon-192x192.png', data: { url: d.url || '/' } };
-  event.waitUntil(self.registration.showNotification(title, options));
+  const title = d.title || "Notification";
+  const body  = d.body  || "";
+  event.waitUntil(showNoti(title, body, d));
 });
 
-// Focus an existing tab with the same path, or open a new one
+/**
+ * On click: route through /push-redirect, which will:
+ *  - send to /login?next=... if not authenticated
+ *  - or to the correct dashboard if authenticated (based on ?type=)
+ */
 self.addEventListener('notificationclick', (event) => {
   event.notification.close();
-  const urlToOpen = event.notification.data?.url || '/';
+
+  const data = (event.notification && event.notification.data) || {};
+  const url = buildRedirectUrl(data);
 
   event.waitUntil((async () => {
     const all = await clients.matchAll({ type: 'window', includeUncontrolled: true });
-    const targetPath = new URL(urlToOpen, self.location.origin).pathname;
-
+    // If there’s already any client from our origin, navigate it to the redirect and focus.
     for (const c of all) {
       try {
-        if (new URL(c.url).pathname === targetPath) return c.focus();
-      } catch {}
+        if ('navigate' in c) {
+          await c.navigate(url);
+          if ('focus' in c) return c.focus();
+          return;
+        }
+      } catch (_) {}
     }
-    return clients.openWindow(urlToOpen);
+    // Otherwise open a new tab
+    return clients.openWindow(url);
   })());
 });

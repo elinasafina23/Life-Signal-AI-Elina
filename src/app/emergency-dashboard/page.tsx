@@ -16,6 +16,10 @@ import {
   doc,
   getDoc,
   Timestamp,
+  type Unsubscribe,
+  type Query as FsQuery,
+  type QuerySnapshot,
+  type DocumentData,
 } from "firebase/firestore";
 
 import { Header } from "@/components/header";
@@ -31,7 +35,7 @@ import {
 } from "@/components/ui/card";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
-import { MapPin, Phone, MessageSquare } from "lucide-react";
+import { MapPin, Phone, MessageSquare, Settings as SettingsIcon } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 
 // Centered popup dialog
@@ -47,9 +51,10 @@ import {
 import { registerDevice } from "@/lib/useFcmToken";
 import { normalizeRole } from "@/lib/roles";
 
-type Status = "OK" | "Inactive" | "SOS";
+// ---------------------- Types ----------------------
+export type Status = "OK" | "Inactive" | "SOS";
 
-type MainUserCard = {
+export type MainUserCard = {
   mainUserUid: string;
   name: string;
   avatar?: string;
@@ -60,7 +65,7 @@ type MainUserCard = {
   colorClass: string;
 };
 
-type MainUserDoc = {
+export type MainUserDoc = {
   firstName?: string;
   lastName?: string;
   avatar?: string;
@@ -69,8 +74,10 @@ type MainUserDoc = {
   sosTriggeredAt?: Timestamp;
   location?: string; // address or "lat,lng"
   role?: string;
+  dueAtMin?: number; // materialized next deadline (minutes since epoch)
 };
 
+// ---------------------- Helpers ----------------------
 const userColors = [
   "bg-red-200",
   "bg-blue-200",
@@ -133,7 +140,7 @@ function getMapImage(location?: string) {
   const FALLBACK = {
     src: "/images/map-fallback-600x300.png",
     alt: "Map placeholder",
-  };
+  } as const;
 
   if (!location) return FALLBACK;
 
@@ -143,9 +150,10 @@ function getMapImage(location?: string) {
   const q = encodeURIComponent(location.trim());
   const url = `https://maps.googleapis.com/maps/api/staticmap?center=${q}&zoom=13&size=600x300&maptype=roadmap&markers=color:red|${q}&key=${key}`;
 
-  return { src: url, alt: `Map of ${location}` };
+  return { src: url, alt: `Map of ${location}` } as const;
 }
 
+// ---------------------- Page ----------------------
 export default function EmergencyDashboardPage() {
   const router = useRouter();
   const { toast } = useToast();
@@ -154,15 +162,17 @@ export default function EmergencyDashboardPage() {
   const [loading, setLoading] = useState(true);
   const [uid, setUid] = useState<string | null>(null);
 
-  // State for centered popup when location is missing
-  const [noLocationUser, setNoLocationUser] = useState<MainUserCard | null>(
-    null
-  );
+  // centered popup when location is missing
+  const [noLocationUser, setNoLocationUser] = useState<MainUserCard | null>(null);
 
-  const unsubsRef = useRef<Record<string, () => void>>({});
+  // keep all active unsubscribers here
+  const unsubsRef = useRef<Record<string, Unsubscribe>>({});
 
   useEffect(() => {
+    const LINKS_KEY = "links";
+
     const unsubAuth = onAuthStateChanged(auth, async (user) => {
+      // clean up any previous listeners
       Object.values(unsubsRef.current).forEach((fn) => fn());
       unsubsRef.current = {};
       setMainUsers([]);
@@ -171,27 +181,22 @@ export default function EmergencyDashboardPage() {
       if (!user) {
         setLoading(false);
         router.replace(
-          `/login?role=emergency_contact&next=${encodeURIComponent(
-            "/emergency-dashboard"
-          )}`
+          `/login?role=emergency_contact&next=${encodeURIComponent("/emergency-dashboard")}`
         );
         return;
       }
 
+      // gate by role using your users/{uid}.role
       try {
         const meSnap = await getDoc(doc(db, "users", user.uid));
-        const myRole = normalizeRole(
-          meSnap.exists() ? (meSnap.data() as any).role : undefined
-        );
+        const myRole = normalizeRole(meSnap.exists() ? (meSnap.data() as any).role : undefined);
         if (myRole !== "emergency_contact") {
           router.replace("/dashboard");
           return;
         }
       } catch {
         router.replace(
-          `/login?role=emergency_contact&next=${encodeURIComponent(
-            "/emergency-dashboard"
-          )}`
+          `/login?role=emergency_contact&next=${encodeURIComponent("/emergency-dashboard")}`
         );
         return;
       }
@@ -199,138 +204,146 @@ export default function EmergencyDashboardPage() {
       setUid(user.uid);
       setLoading(false);
 
-      const linksQuery = query(
+      // ---- Listen to links in LEGACY style: uid === current user's uid ----
+      const linksByLegacyUid = query(
         collectionGroup(db, "emergency_contact"),
         where("uid", "==", user.uid)
       );
 
-      unsubsRef.current.links = onSnapshot(linksQuery, (linksSnap) => {
-        const nextMainUserIds = new Set<string>();
+      function wireLinksListener(q: FsQuery<DocumentData>, key: string) {
+        unsubsRef.current[key] = onSnapshot(
+          q,
+          (linksSnap: QuerySnapshot<DocumentData>) => {
+            // gather all main user IDs referenced by the link snapshot(s)
+            const nextMainUserIds = new Set<string>(
+              Object.keys(unsubsRef.current).filter((k) => k !== LINKS_KEY)
+            );
 
-        linksSnap.forEach((linkDoc) => {
-          const mainUserUid = linkDoc.ref.parent.parent?.id;
-          if (mainUserUid) nextMainUserIds.add(mainUserUid);
-        });
+            linksSnap.forEach((linkDoc) => {
+              // users/{MAIN_UID}/emergency_contact/{...}
+              const mainUserUid = linkDoc.ref.parent.parent?.id;
+              if (mainUserUid) nextMainUserIds.add(mainUserUid);
+            });
 
-        Object.keys(unsubsRef.current).forEach((k) => {
-          if (k !== "links" && !nextMainUserIds.has(k)) {
-            unsubsRef.current[k]();
-            delete unsubsRef.current[k];
-          }
-        });
-
-        nextMainUserIds.forEach((mainUserId) => {
-          if (unsubsRef.current[mainUserId]) return;
-
-          const userDocRef = doc(db, "users", mainUserId);
-          unsubsRef.current[mainUserId] = onSnapshot(
-            userDocRef,
-            (userDocSnap) => {
-              const userData = userDocSnap.data() as MainUserDoc;
-              let updatedCard: MainUserCard;
-
-              if (userDocSnap.exists() && userData) {
-                const name =
-                  `${userData.firstName || ""} ${
-                    userData.lastName || ""
-                  }`.trim() || "Main User";
-                const displayName = `${userData.firstName || ""} ${
-                  userData.lastName?.[0] || ""
-                }`.trim();
-                const { initials, colorClass } = initialsAndColor(name);
-
-                const last =
-                  userData.lastCheckinAt instanceof Timestamp
-                    ? userData.lastCheckinAt.toDate()
-                    : undefined;
-                const rawInt = userData.checkinInterval;
-                const intervalMin =
-                  typeof rawInt === "number"
-                    ? rawInt
-                    : parseInt(String(rawInt), 10) || 12 * 60;
-
-                let status: Status = "OK";
-                if (userData.sosTriggeredAt instanceof Timestamp) {
-                  status = "SOS";
-                } else if (last) {
-                  const nextDue = last.getTime() + intervalMin * 60 * 1000;
-                  if (Date.now() > nextDue) status = "Inactive";
-                } else {
-                  status = "Inactive";
-                }
-
-                updatedCard = {
-                  mainUserUid: mainUserId,
-                  name: displayName,
-                  avatar: userData.avatar,
-                  initials,
-                  colorClass,
-                  status,
-                  lastCheckIn: formatWhen(last),
-                  location: userData.location || "",
-                };
-              } else {
-                const { initials, colorClass } =
-                  initialsAndColor("User Not Found");
-                updatedCard = {
-                  mainUserUid: mainUserId,
-                  name: "User Not Found",
-                  initials,
-                  colorClass,
-                  avatar: "",
-                  status: "Inactive",
-                };
+            // remove listeners for unlinked users
+            Object.keys(unsubsRef.current).forEach((k) => {
+              if (k === LINKS_KEY) return;
+              if (!nextMainUserIds.has(k)) {
+                unsubsRef.current[k](); // unsubscribe
+                delete unsubsRef.current[k];
               }
+            });
 
-              setMainUsers((prev) => {
-                const map = new Map(prev.map((u) => [u.mainUserUid, u]));
-                map.set(mainUserId, updatedCard);
-                return Array.from(map.values()).sort((a, b) =>
-                  a.name.localeCompare(b.name)
-                );
-              });
-            },
-            (error) => {
-              console.error(
-                `[Emergency Dashboard] User doc listen failed for ${mainUserId}:`,
-                error
+            // ensure we are listening to each linked main user doc
+            nextMainUserIds.forEach((mainUserId) => {
+              if (unsubsRef.current[mainUserId]) return;
+
+              const userDocRef = doc(db, "users", mainUserId);
+              unsubsRef.current[mainUserId] = onSnapshot(
+                userDocRef,
+                (userDocSnap) => {
+                  const userData = (userDocSnap.data() as MainUserDoc) || undefined;
+
+                  const name =
+                    `${userData?.firstName || ""} ${userData?.lastName || ""}`.trim() ||
+                    "Main User";
+                  const displayName = `${userData?.firstName || ""} ${
+                    userData?.lastName?.[0] || ""
+                  }`.trim();
+                  const { initials, colorClass } = initialsAndColor(name);
+
+                  const last =
+                    userData?.lastCheckinAt instanceof Timestamp
+                      ? userData.lastCheckinAt.toDate()
+                      : undefined;
+
+                  const rawInt = userData?.checkinInterval;
+                  const intervalMin =
+                    typeof rawInt === "number"
+                      ? rawInt
+                      : parseInt(String(rawInt ?? ""), 10) || 12 * 60;
+
+                  // ✅ prefer dueAtMin from backend if present
+                  const dueAtMin = Number((userData as any)?.dueAtMin);
+                  const nowMin = Math.floor(Date.now() / 60000);
+
+                  let status: Status = "OK";
+                  if (userData?.sosTriggeredAt instanceof Timestamp) {
+                    status = "SOS";
+                  } else if (Number.isFinite(dueAtMin)) {
+                    status = nowMin >= dueAtMin ? "Inactive" : "OK";
+                  } else if (last) {
+                    const nextDue = last.getTime() + intervalMin * 60 * 1000;
+                    status = Date.now() > nextDue ? "Inactive" : "OK";
+                  } else {
+                    status = "Inactive";
+                  }
+
+                  const updatedCard: MainUserCard = {
+                    mainUserUid: mainUserId,
+                    name: displayName || name,
+                    avatar: userData?.avatar,
+                    initials,
+                    colorClass,
+                    status,
+                    lastCheckIn: formatWhen(last),
+                    location: userData?.location || "",
+                  };
+
+                  setMainUsers((prev) => {
+                    const map = new Map(prev.map((u) => [u.mainUserUid, u]));
+                    map.set(mainUserId, updatedCard);
+                    return Array.from(map.values()).sort((a, b) => a.name.localeCompare(b.name));
+                  });
+                },
+                (error) => {
+                  console.error(
+                    `[Emergency Dashboard] User doc listen failed for ${mainUserId}:`,
+                    error
+                  );
+                  const { initials, colorClass } = initialsAndColor("User Load Error");
+                  setMainUsers((prev) => {
+                    const map = new Map(prev.map((u) => [u.mainUserUid, u]));
+                    map.set(mainUserId, {
+                      mainUserUid: mainUserId,
+                      name: "User Load Error",
+                      initials,
+                      colorClass,
+                      status: "Inactive",
+                    });
+                    return Array.from(map.values()).sort((a, b) => a.name.localeCompare(b.name));
+                  });
+                }
               );
-              const { initials, colorClass } =
-                initialsAndColor("User Load Error");
-              setMainUsers((prev) => {
-                const map = new Map(prev.map((u) => [u.mainUserUid, u]));
-                map.set(mainUserId, {
-                  mainUserUid: mainUserId,
-                  name: "User Load Error",
-                  initials,
-                  colorClass,
-                  status: "Inactive",
-                });
-                return Array.from(map.values()).sort((a, b) =>
-                  a.name.localeCompare(b.name)
-                );
-              });
-            }
-          );
-        });
+            });
 
-        setMainUsers((prev) => {
-          const validUids = new Set(nextMainUserIds);
-          return prev.filter((user) => validUids.has(user.mainUserUid));
-        });
-      });
+            // drop any cards that are no longer linked
+            setMainUsers((prev) => {
+              const valid = new Set(
+                Object.keys(unsubsRef.current).filter((k) => k !== LINKS_KEY)
+              );
+              return prev.filter((u) => valid.has(u.mainUserUid));
+            });
+          }
+        );
+      }
+
+     
+      wireLinksListener(linksByLegacyUid as FsQuery<DocumentData>, LINKS_KEY);
     });
 
     return () => {
+      // cleanup on unmount
       unsubAuth();
       Object.values(unsubsRef.current).forEach((fn) => fn());
       unsubsRef.current = {};
     };
   }, [router]);
 
+  // ensure this contact device is registered to receive pushes
   useEffect(() => {
     if (!uid) return;
-    registerDevice(uid, "emergency");
+    registerDevice(uid, "emergency"); // keep your signature
   }, [uid]);
 
   const handleAcknowledge = (userName: string) => {
@@ -347,9 +360,7 @@ export default function EmergencyDashboardPage() {
       setNoLocationUser(user);
       return;
     }
-    const mapsUrl = `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(
-      loc
-    )}`;
+    const mapsUrl = `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(loc)}`;
     window.open(mapsUrl, "_blank", "noopener,noreferrer");
   };
 
@@ -357,15 +368,21 @@ export default function EmergencyDashboardPage() {
     <div className="flex flex-col min-h-screen bg-secondary">
       <Header />
       <main className="flex-grow container mx-auto px-4 py-8">
-        <h1 className="text-3xl md:text-4xl font-headline font-bold mb-6">
-          Emergency Contact Dashboard
-        </h1>
+        <div className="flex items-center justify-between mb-6">
+          <h1 className="text-3xl md:text-4xl font-headline font-bold">
+            Emergency Contact Dashboard
+          </h1>
+          {uid && (
+            <Button variant="outline" onClick={() => router.push("/emergency-settings")}>
+              <SettingsIcon className="h-5 w-5 mr-2" />
+              Settings
+            </Button>
+          )}
+        </div>
 
         {loading && <p>Loading your people…</p>}
         {!loading && mainUsers.length === 0 && (
-          <p className="opacity-70">
-            No linked users yet. Ask them to send you an invite.
-          </p>
+          <p className="opacity-70">No linked users yet. Ask them to send you an invite.</p>
         )}
 
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
@@ -375,9 +392,7 @@ export default function EmergencyDashboardPage() {
               <Card
                 key={p.mainUserUid}
                 className={`shadow-lg hover:shadow-xl transition-shadow ${
-                  p.status === "SOS"
-                    ? "border-destructive bg-destructive/10"
-                    : ""
+                  p.status === "SOS" ? "border-destructive bg-destructive/10" : ""
                 }`}
               >
                 <CardHeader className="flex flex-row items-center gap-4">
@@ -388,9 +403,7 @@ export default function EmergencyDashboardPage() {
                     </AvatarFallback>
                   </Avatar>
                   <div>
-                    <CardTitle className="text-2xl font-headline">
-                      {p.name}
-                    </CardTitle>
+                    <CardTitle className="text-2xl font-headline">{p.name}</CardTitle>
                     <CardDescription>
                       {p.lastCheckIn ? `Last check-in: ${p.lastCheckIn}` : "—"}
                     </CardDescription>
@@ -400,10 +413,7 @@ export default function EmergencyDashboardPage() {
                 <CardContent className="space-y-4">
                   <div className="flex justify-between items-center">
                     <p className="font-semibold">Status:</p>
-                    <Badge
-                      variant={getStatusVariant(p.status)}
-                      className="text-md px-3 py-1"
-                    >
+                    <Badge variant={getStatusVariant(p.status)} className="text-md px-3 py-1">
                       {p.status || "—"}
                     </Badge>
                   </div>
@@ -439,10 +449,7 @@ export default function EmergencyDashboardPage() {
                     Message
                   </Button>
                   {p.status === "SOS" && (
-                    <Button
-                      className="col-span-2"
-                      onClick={() => handleAcknowledge(p.name)}
-                    >
+                    <Button className="col-span-2" onClick={() => handleAcknowledge(p.name)}>
                       Acknowledge Alert
                     </Button>
                   )}
@@ -455,10 +462,7 @@ export default function EmergencyDashboardPage() {
       <Footer />
 
       {/* Centered popup when location is missing */}
-      <Dialog
-        open={!!noLocationUser}
-        onOpenChange={(open) => !open && setNoLocationUser(null)}
-      >
+      <Dialog open={!!noLocationUser} onOpenChange={(open) => !open && setNoLocationUser(null)}>
         <DialogContent className="sm:max-w-[420px]">
           <DialogHeader>
             <DialogTitle>Location unavailable</DialogTitle>

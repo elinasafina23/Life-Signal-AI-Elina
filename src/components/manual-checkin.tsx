@@ -1,4 +1,3 @@
-// src/components/manual-checkin.tsx
 "use client";
 
 import { useState } from "react";
@@ -7,6 +6,7 @@ import {
   addDoc,
   collection,
   doc,
+  getDoc,
   serverTimestamp,
   setDoc,
 } from "firebase/firestore";
@@ -15,43 +15,75 @@ type Status = "safe" | "missed" | "unknown";
 
 interface ManualCheckInProps {
   status: Status;
-  /** Optional: show a spinner/message while writing */
+  /** Optional: fires after a successful write */
   onCheckedIn?: () => void;
 }
 
+/** Convert ms epoch to whole minutes (drops seconds). */
+const toEpochMinutes = (ms: number) => Math.floor(ms / 60000);
+
 /**
  * ManualCheckIn
- * - Appends a check-in to the flat `/checkins` collection
- * - Also denormalizes the latest time onto `/users/{uid}.lastCheckinAt`
- * - Named export to match `import { ManualCheckIn } from "@/components/manual-checkin"`
+ * - Appends a check-in to /checkins
+ * - Updates /users/{uid}.lastCheckinAt
+ * - Maintains /users/{uid}.dueAtMin so the scheduler can query only due users
+ * - 🚫 Guards against emergency-contact accounts writing check-in fields
  */
 export function ManualCheckIn({ status, onCheckedIn }: ManualCheckInProps) {
   const [loading, setLoading] = useState(false);
+  const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
   const handleCheckIn = async () => {
+    setErrorMsg(null);
     try {
       setLoading(true);
 
       const user = auth.currentUser;
-      if (!user) return;
+      if (!user) throw new Error("You must be signed in to check in.");
       const uid = user.uid;
+
+      // Read user to get interval and account type
+      const userRef = doc(db, "users", uid);
+      const snap = await getDoc(userRef);
+      const data = snap.data() || {};
+
+      // 🚫 Guard: emergency-contact accounts cannot check in
+      if (data.accountType === "contact") {
+        throw new Error("This account is an emergency contact and cannot check in.");
+      }
+
+      // Interval (fallback: 12h = 720 minutes)
+      const intervalMin =
+        Number(data.checkinInterval) > 0 ? Number(data.checkinInterval) : 720;
 
       // 1) Append to history (flat collection)
       await addDoc(collection(db, "checkins"), {
         userId: uid,
         createdAt: serverTimestamp(), // Firestore Timestamp
-        status: "OK",                 // or whatever status you want to store
+        status: "OK",                 // customize if you track other states
         source: "manual",
       });
 
-      // 2) Denormalize latest time for cheap dashboard reads
+      // 2) Update latest time + keep dueAtMin current for the scheduler
+      const now = Date.now();
+      const dueAtMin = toEpochMinutes(now) + intervalMin;
+
       await setDoc(
-        doc(db, "users", uid),
-        { lastCheckinAt: serverTimestamp() },
+        userRef,
+        {
+          checkinEnabled: true,             // ensures the scheduler includes this user
+          lastCheckinAt: serverTimestamp(), // canonical "last check-in" time
+          dueAtMin,                         // minutes since epoch when next check-in is due
+          // optional: clear any "missed" flag on the user
+          missedNotifiedAt: null,
+        },
         { merge: true }
       );
 
       onCheckedIn?.();
+    } catch (e: any) {
+      setErrorMsg(e?.message || "Failed to check in.");
+      console.error(e);
     } finally {
       setLoading(false);
     }
@@ -71,13 +103,20 @@ export function ManualCheckIn({ status, onCheckedIn }: ManualCheckInProps) {
     loading ? "..." : status === "safe" ? "✅ Safe" : status === "missed" ? "Check In Now" : "Check In";
 
   return (
-    <button
-      onClick={handleCheckIn}
-      disabled={loading}
-      className={`${base} ${variant}`}
-      aria-busy={loading}
-    >
-      {label}
-    </button>
+    <div className="flex flex-col items-center gap-3">
+      <button
+        onClick={handleCheckIn}
+        disabled={loading}
+        className={`${base} ${variant}`}
+        aria-busy={loading}
+      >
+        {label}
+      </button>
+      {errorMsg && (
+        <p role="alert" className="text-sm text-red-600">
+          {errorMsg}
+        </p>
+      )}
+    </div>
   );
 }

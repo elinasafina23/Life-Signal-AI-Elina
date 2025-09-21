@@ -1,3 +1,6 @@
+// at top of route.ts files
+export const runtime = "nodejs"; // Next 13/14
+
 // src/app/api/emergency_contact/invite/route.ts
 import { NextRequest, NextResponse } from "next/server";
 import { FieldValue } from "firebase-admin/firestore";

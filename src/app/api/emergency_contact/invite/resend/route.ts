@@ -1,4 +1,7 @@
 // src/app/api/emergency_contact/resend/route.ts
+// at top of route.ts files
+export const runtime = "nodejs"; // Next 13/14
+
 import { NextRequest, NextResponse } from "next/server";
 import { FieldValue } from "firebase-admin/firestore";
 import crypto from "crypto";
@@ -75,7 +78,7 @@ export async function POST(req: NextRequest) {
 
     const inviteRef = db.collection("invites").doc();
     batch.set(inviteRef, {
-      userId: mainUserId,
+      mainUserId: mainUserId,
       role: "emergency_contact",
       emergencyContactEmail,
       relation,
