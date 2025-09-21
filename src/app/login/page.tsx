@@ -3,9 +3,11 @@
 
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
+import { useEffect, useMemo, useState } from "react";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import * as z from "zod";
+
 import { Button } from "@/components/ui/button";
 import {
   Card, CardContent, CardDescription, CardHeader, CardTitle, CardFooter,
@@ -18,115 +20,108 @@ import { Header } from "@/components/header";
 import { Footer } from "@/components/footer";
 import { useToast } from "@/hooks/use-toast";
 
-import { auth, db } from "@/firebase";
+import { auth } from "@/firebase";
 import { signInWithEmailAndPassword } from "firebase/auth";
-import { doc, getDoc } from "firebase/firestore";
-import { useState } from "react";
 import { normalizeRole, Role } from "@/lib/roles";
 
+/* ---------------- Schema ---------------- */
+// Validate the form with zod (email + non-empty password).
 const loginSchema = z.object({
   email: z.string().email({ message: "Please enter a valid email address." }),
   password: z.string().min(1, { message: "Password is required." }),
 });
 
-// A utility function that determines the correct next page, sanitizing the URL.
+/* ---------------- Helpers ---------------- */
+// Only allow same-origin next links; otherwise fall back by role.
 function safeNext(n: string | null | undefined, fallbackRole: Role) {
-  // Only allow redirects to same-site paths.
   if (n && n.startsWith("/")) return n;
-  // Redirect to the default dashboard based on the inferred role from the URL.
   return fallbackRole === "emergency_contact" ? "/emergency-dashboard" : "/dashboard";
 }
 
-// A utility function to fetch the user's actual role from Firestore.
-async function fetchActualRole(uid: string, fallback: Role): Promise<Role> {
-  try {
-    // Fetches the user document from Firestore.
-    const snap = await getDoc(doc(db, "users", uid));
-    // Extracts the role from the document data.
-    const r = snap.exists() ? (snap.data() as any).role : undefined;
-    // Returns the normalized role or a fallback.
-    return normalizeRole(r) ?? fallback;
-  } catch {
-    return fallback;
-  }
+// Start creating a server session cookie; we purposely don't await it
+// so we can redirect immediately (client SDK keeps working meanwhile).
+async function setSessionCookieFast() {
+  const u = auth.currentUser;
+  if (!u) return;
+  const idToken = await u.getIdToken(true);
+  fetch("/api/auth/session", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    credentials: "include",
+    body: JSON.stringify({ idToken }),
+    keepalive: true, // helps if we navigate away instantly
+  }).catch(() => {});
+}
+
+// If this login came from an invite link, we can accept it in the background
+// after redirect. This does not block navigation.
+async function maybeAutoAcceptInvite(token: string | null) {
+  if (!token) return;
+  fetch("/api/emergency_contact/accept", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    credentials: "include",
+    body: JSON.stringify({ token }),
+    keepalive: true,
+  }).catch(() => {});
 }
 
 export default function LoginPage() {
   const router = useRouter();
   const params = useSearchParams();
   const { toast } = useToast();
+
   const [isSubmitting, setIsSubmitting] = useState(false);
 
-  // Retrieves query parameters from the URL.
+  // Read query params for role, invite token, and explicit next path.
   const roleFromUrl: Role = normalizeRole(params.get("role")) ?? "main_user";
-  const token = params.get("token") || "";
+  const token = params.get("token");
   const explicitNext = params.get("next");
 
+  // Compute the destination once (memoized) so we don't recompute on every render.
+  const destination = useMemo(
+    () => safeNext(explicitNext, roleFromUrl),
+    [explicitNext, roleFromUrl]
+  );
+
+  // (Optional) You can keep this effect empty or add analytics; we removed
+  // router.prefetch() because App Router's useRouter() doesn't expose it.
+  useEffect(() => {
+    // No-op: prefetch removed to avoid TypeScript errors.
+  }, [destination]);
+
+  // Hook up react-hook-form with our zod schema.
   const form = useForm<z.infer<typeof loginSchema>>({
     resolver: zodResolver(loginSchema),
     defaultValues: { email: "", password: "" },
   });
 
-  // A helper function to create a server-side session cookie for API routes.
-  const setSessionCookie = async () => {
-    const u = auth.currentUser;
-    if (!u) return;
-    const idToken = await u.getIdToken(true);
-    const res = await fetch("/api/auth/session", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      credentials: "include",
-      body: JSON.stringify({ idToken }),
-    });
-    if (!res.ok) throw new Error("Failed to set session");
-  };
-
-  // A helper function to automatically accept an invite token if one exists.
-  const maybeAutoAcceptInvite = async () => {
-    if (!token) return;
-    try {
-      await fetch("/api/emergency_contact/accept", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        credentials: "include",
-        body: JSON.stringify({ token }),
-      });
-    } catch {
-      // Ignore errors; the verify-email or accept page can handle it.
-    }
-  };
-
+  // Main submit handler.
   const onSubmit = async (values: z.infer<typeof loginSchema>) => {
     try {
       setIsSubmitting(true);
 
-      // 1. Sign in the user with Firebase Auth. This is the first step.
+      // 1) Sign in with Firebase Auth (await only this).
       const { user } = await signInWithEmailAndPassword(
         auth,
         values.email.trim().toLowerCase(),
         values.password
       );
 
-      // 2. Authorize API routes by setting a session cookie. This is critical for server-side operations.
-      await setSessionCookie();
+      // 2) Fire-and-forget the session cookie creation + invite acceptance.
+      void setSessionCookieFast();
+      void maybeAutoAcceptInvite(token);
 
-      // 3. Immediately redirect the user based on the inferred role from the URL.
-      // This is the key change to solve the delay.
-      const destination = safeNext(explicitNext, roleFromUrl);
+      // 3) Redirect immediately (no waiting).
       router.replace(destination);
 
-      // 4. (Asynchronous operation) Display a success toast notification.
+      // 4) Friendly toast (doesn't block the redirect).
       toast({
         title: "Login Successful",
         description: `Welcome back, ${user.email ?? "user"}!`,
       });
-
-      // 5. (Asynchronous operation) Attempt to auto-accept the invite.
-      // This happens *after* the redirect to ensure the page loads quickly.
-      await maybeAutoAcceptInvite();
-
     } catch (err: any) {
-      // Error handling for login failures.
+      // Map common auth errors to friendly messages.
       const code = err?.code as string | undefined;
       let message = "Something went wrong. Please try again.";
       if (code === "auth/invalid-email") message = "Invalid email address.";
@@ -134,15 +129,17 @@ export default function LoginPage() {
         message = "Incorrect email or password.";
       else if (code === "auth/too-many-requests")
         message = "Too many attempts. Please wait and try again.";
+
       toast({ title: "Login failed", description: message, variant: "destructive" });
     } finally {
-      // Always stop the submitting state to re-enable the form.
       setIsSubmitting(false);
     }
   };
 
-  // Precomputes the link to the signup page.
-  const signupNext = safeNext(explicitNext, roleFromUrl);
+  // Build the signup link (preserves role + next + invite token).
+  const signupHref = `/signup?role=${encodeURIComponent(
+    roleFromUrl
+  )}&next=${encodeURIComponent(destination)}${token ? `&token=${encodeURIComponent(token)}` : ""}`;
 
   return (
     <div className="flex flex-col min-h-screen bg-background">
@@ -161,6 +158,7 @@ export default function LoginPage() {
           <Form {...form}>
             <form onSubmit={form.handleSubmit(onSubmit)}>
               <CardContent className="space-y-4">
+                {/* Email field */}
                 <FormField
                   control={form.control}
                   name="email"
@@ -173,12 +171,16 @@ export default function LoginPage() {
                           placeholder="your@email.com"
                           {...field}
                           disabled={isSubmitting}
+                          autoComplete="email"
+                          inputMode="email"
                         />
                       </FormControl>
                       <FormMessage />
                     </FormItem>
                   )}
                 />
+
+                {/* Password field */}
                 <FormField
                   control={form.control}
                   name="password"
@@ -191,6 +193,7 @@ export default function LoginPage() {
                           placeholder="••••••••"
                           {...field}
                           disabled={isSubmitting}
+                          autoComplete="current-password"
                         />
                       </FormControl>
                       <FormMessage />
@@ -198,20 +201,15 @@ export default function LoginPage() {
                   )}
                 />
               </CardContent>
+
               <CardFooter className="flex flex-col gap-4">
                 <Button type="submit" className="w-full text-lg py-6" disabled={isSubmitting}>
                   {isSubmitting ? "Signing in..." : "Sign In"}
                 </Button>
+
                 <p className="text-center text-sm text-muted-foreground">
                   New to LifeSignal?{" "}
-                  <Link
-                    href={`/signup?role=${encodeURIComponent(
-                      roleFromUrl
-                    )}&next=${encodeURIComponent(
-                      signupNext
-                    )}${token ? `&token=${encodeURIComponent(token)}` : ""}`}
-                    className="font-semibold text-primary hover:underline"
-                  >
+                  <Link href={signupHref} className="font-semibold text-primary hover:underline">
                     Create an account
                   </Link>
                 </p>

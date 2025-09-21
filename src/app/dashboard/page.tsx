@@ -69,12 +69,14 @@ export default function DashboardPage() {
   const [timeLeft, setTimeLeft] = useState<string>("");
   const [locationSharing, setLocationSharing] = useState<boolean | null>(null);
   const [roleChecked, setRoleChecked] = useState(false);
-  const [uid, setUid] = useState<string | null>(null);
+
+  // 👇 renamed to mainUserUid for clarity
+  const [mainUserUid, setMainUserUid] = useState<string | null>(null);
 
   const userDocUnsubRef = useRef<(() => void) | null>(null);
   const userRef = useRef<ReturnType<typeof doc> | null>(null);
 
-  // Show an OS banner even when the tab is focused (foreground messages)
+  // Handle push notifications while app is open
   useEffect(() => {
     let unsub: (() => void) | undefined;
 
@@ -82,7 +84,6 @@ export default function DashboardPage() {
       const { isSupported, getMessaging, onMessage } = await import("firebase/messaging");
       if (!(await isSupported())) return;
 
-      // reuse/init app dynamically to avoid SSR issues
       const { initializeApp, getApps } = await import("firebase/app");
       const apps = getApps();
       const app = apps.length
@@ -109,10 +110,9 @@ export default function DashboardPage() {
     return () => unsub?.();
   }, []);
 
-  // Auth + Firestore subscription
+  // 🔑 Auth + Firestore subscription
   useEffect(() => {
     const offAuth = onAuthStateChanged(auth, async (user) => {
-      // clean old listener
       if (userDocUnsubRef.current) {
         userDocUnsubRef.current();
         userDocUnsubRef.current = null;
@@ -120,7 +120,7 @@ export default function DashboardPage() {
 
       if (!user) {
         userRef.current = null;
-        setUid(null);
+        setMainUserUid(null); // reset UID
         setLastCheckIn(null);
         setIntervalMinutes(12 * 60);
         setStatus("unknown");
@@ -130,11 +130,10 @@ export default function DashboardPage() {
         return;
       }
 
-      setUid(user.uid);
+      setMainUserUid(user.uid); // store main user UID
       const uref = doc(db, "users", user.uid);
       userRef.current = uref;
 
-      // Ensure doc exists so later updates don't fail
       await setDoc(uref, { createdAt: serverTimestamp() }, { merge: true });
 
       const unsub = onSnapshot(uref, (snap) => {
@@ -144,7 +143,7 @@ export default function DashboardPage() {
         }
         const data = snap.data() as UserDoc;
 
-        // Gate by role: emergency contacts aren't allowed here
+        // 🚫 Prevent emergency contacts from seeing this dashboard
         const r = normalizeRole(data.role);
         if (r === "emergency_contact") {
           router.replace("/emergency-dashboard");
@@ -185,19 +184,19 @@ export default function DashboardPage() {
     };
   }, [router]);
 
-  // Register this device for push on the main dashboard
+  // Register device for push under this main user
   useEffect(() => {
-    if (!roleChecked || !uid) return;
-    registerDevice(uid, "primary");
-  }, [roleChecked, uid]);
+    if (!roleChecked || !mainUserUid) return;
+    registerDevice(mainUserUid, "primary");
+  }, [roleChecked, mainUserUid]);
 
-  // Derived next check-in time
+  // Compute next check-in time
   const nextCheckIn = useMemo(() => {
     if (!lastCheckIn) return null;
     return new Date(lastCheckIn.getTime() + intervalMinutes * 60 * 1000);
   }, [lastCheckIn, intervalMinutes]);
 
-  // Countdown + status
+  // Countdown + status updater
   useEffect(() => {
     if (!nextCheckIn) {
       setStatus("unknown");
@@ -233,7 +232,7 @@ export default function DashboardPage() {
     return () => clearInterval(id);
   }, [nextCheckIn]);
 
-  // ---- UI helpers & actions ----
+  // --- UI helpers ---
   const formatWhen = (d: Date | null) => {
     if (!d) return "—";
     const now = new Date();
@@ -254,7 +253,7 @@ export default function DashboardPage() {
     return `${d.toLocaleDateString()} ${time}`;
   };
 
-  // SOS button handler
+  // 🚨 SOS button
   const handleSOS = async () => {
     try {
       if (!userRef.current) throw new Error("Not signed in");
@@ -275,7 +274,7 @@ export default function DashboardPage() {
     }
   };
 
-  // Manual Check-in button handler (writes dueAtMin + checkinEnabled)
+  // ✅ Manual check-in
   const handleCheckIn = async () => {
     try {
       if (!userRef.current) throw new Error("Not signed in");
@@ -285,8 +284,7 @@ export default function DashboardPage() {
 
       const dueAtMin = toEpochMinutes(Date.now()) + intervalMin;
 
-      // optimistic UI
-      setLastCheckIn(new Date());
+      setLastCheckIn(new Date()); // optimistic UI
 
       await updateDoc(userRef.current, {
         checkinEnabled: true,
@@ -319,7 +317,6 @@ export default function DashboardPage() {
       setIntervalMinutes(minutes);
       if (!userRef.current) throw new Error("Not signed in");
 
-      // Recompute next due from last check-in (or now if missing)
       const baseMs = lastCheckIn?.getTime?.() ?? Date.now();
       const newDueAtMin = toEpochMinutes(baseMs) + minutes;
 
@@ -341,7 +338,7 @@ export default function DashboardPage() {
     }
   };
 
-  // Don't flash dashboard before we confirm role
+  // Prevent flashing dashboard before role check
   if (!roleChecked) {
     return (
       <div className="flex flex-col min-h-screen bg-secondary">
@@ -362,6 +359,7 @@ export default function DashboardPage() {
     );
   }
 
+  // --- UI ---
   return (
     <div className="flex flex-col min-h-screen bg-secondary">
       <Header />
@@ -492,7 +490,7 @@ export default function DashboardPage() {
               </CardContent>
             </Card>
 
-            {/* Contacts */}
+            {/* Emergency Contacts */}
             <div className="md:col-span-2">
               <EmergencyContacts />
             </div>

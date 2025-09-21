@@ -1,11 +1,16 @@
 // src/app/api/emergency_contact/accept/route.ts
+
 import { NextRequest, NextResponse } from "next/server";
 import { FieldValue } from "firebase-admin/firestore";
 import crypto from "crypto";
 import { db, adminAuth } from "@/lib/firebaseAdmin";
 import { normalizeRole, isEmergencyContactRole } from "@/lib/roles";
 
-// --- helpers ---
+/**
+ * Normalize an email for safe comparison:
+ * - lowercase
+ * - gmail: strip dots and plus-tags
+ */
 function normalizeEmail(e?: string | null) {
   const v = (e || "").trim().toLowerCase();
   const [local = "", domain = ""] = v.split("@");
@@ -16,10 +21,16 @@ function normalizeEmail(e?: string | null) {
   return v;
 }
 
+/**
+ * Ensure the caller is signed in AND has an emergency-contact role.
+ * Returns their uid (→ emergencyContactUid) and normalized email.
+ */
 async function requireEmergencyContact(req: NextRequest) {
+  // Read the server session cookie set by /api/auth/session
   const cookie = req.cookies.get("__session")?.value || "";
   if (!cookie) throw new Error("UNAUTHENTICATED");
 
+  // Verify the session cookie
   let decoded;
   try {
     decoded = await adminAuth.verifySessionCookie(cookie, true);
@@ -27,20 +38,36 @@ async function requireEmergencyContact(req: NextRequest) {
     throw new Error("UNAUTHENTICATED");
   }
 
-  // role check (can move to custom claims later)
+  // Check role (from Firestore user doc — you can move to custom claims later)
   const userSnap = await db.doc(`users/${decoded.uid}`).get();
   const data = userSnap.data() as { role?: string; email?: string } | undefined;
   const role = normalizeRole(data?.role);
   if (!isEmergencyContactRole(role)) throw new Error("NOT_AUTHORIZED");
 
+  // Prefer Firestore email, fallback to token email
   const email = data?.email || (decoded as any)?.email || "";
   return { uid: decoded.uid as string, email: normalizeEmail(email) };
 }
 
-// --- route ---
+/**
+ * POST /api/emergency_contact/accept
+ * Accept an invite linking the signed-in emergency contact to a main user.
+ *
+ * Body:
+ * - token?: string       // invite token (or)
+ * - inviteId?: string    // invite doc id
+ *
+ * Effects:
+ * - Upserts link doc at: users/{mainUserUid}/emergency_contact/{emergencyContactUid}
+ * - Marks invite accepted
+ * - Upserts a top-level summary doc (optional analytics): emergencyContacts/{mainUserUid_email}
+ */
 export async function POST(req: NextRequest) {
   try {
+    // Ensure caller is an emergency contact; get their identity
     const { uid: emergencyContactUid, email: signedInEmail } = await requireEmergencyContact(req);
+
+    // Parse request payload; support token OR inviteId
     const body = await req.json().catch(() => ({}));
     const token: string = String(body?.token ?? "");
     const inviteId: string = String(body?.inviteId ?? body?.invite ?? "");
@@ -49,10 +76,11 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "token or invite/inviteId required" }, { status: 400 });
     }
 
-    // Load invite
+    // --- Load the invite document ---
     let inviteRef = inviteId ? db.collection("invites").doc(inviteId) : null;
     let inviteSnap = inviteRef ? await inviteRef.get() : null;
 
+    // If not found by id, try finding by hashed token
     if (!inviteSnap || !inviteSnap.exists) {
       if (!token) return NextResponse.json({ error: "Invite not found" }, { status: 404 });
       const tokenHash = crypto.createHash("sha256").update(token).digest("hex");
@@ -64,22 +92,26 @@ export async function POST(req: NextRequest) {
 
     const inv = inviteSnap.data() as any;
 
-    // Validations
+    // --- Validate the invite matches an emergency-contact role ---
     if (inv.role && normalizeRole(inv.role) !== "emergency_contact") {
       return NextResponse.json({ error: "Invite role mismatch" }, { status: 400 });
     }
 
+    // If already accepted by this same user, we’ll behave idempotently
     const alreadyAcceptedByThisUser =
       inv.status === "accepted" && inv.acceptedBy === emergencyContactUid;
 
+    // Expiration check (unless it was already accepted by this user)
     if (inv.expiresAt?.toMillis && inv.expiresAt.toMillis() < Date.now() && !alreadyAcceptedByThisUser) {
       return NextResponse.json({ error: "Invite expired" }, { status: 410 });
     }
+
+    // Token check (only if provided and invite carries a token)
     if (!alreadyAcceptedByThisUser && token && inv.token && inv.token !== token) {
       return NextResponse.json({ error: "Invite token mismatch" }, { status: 400 });
     }
 
-    // Email match
+    // --- Validate recipient email matches the signed-in contact ---
     const invitedEmail = normalizeEmail(inv.emergencyContactEmail);
     if (!invitedEmail) {
       return NextResponse.json({ error: "Invite missing recipient email" }, { status: 400 });
@@ -91,52 +123,58 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // Main user
-    const mainUserId: string = inv.mainUserId;
-    if (!mainUserId) {
+    // --- Identify the main user being linked to ---
+    const mainUserUid: string = inv.mainUserId; // invite schema used mainUserId previously
+    if (!mainUserUid) {
       return NextResponse.json({ error: "Invite missing main user id" }, { status: 400 });
     }
 
-    // Optional display fields
+    // --- Optional display fields (for dashboard cards) ---
     let mainUserName = inv.mainUserName || "";
     let mainUserAvatar = inv.mainUserAvatar || "";
     try {
-      const mainSnap = await db.doc(`users/${mainUserId}`).get();
+      const mainSnap = await db.doc(`users/${mainUserUid}`).get();
       if (mainSnap.exists) {
         const m = mainSnap.data() as any;
         mainUserName = mainUserName || m.displayName || "";
         mainUserAvatar = mainUserAvatar || m.photoURL || "";
       }
     } catch {
-      /* best effort only */
+      /* best-effort enrichment only */
     }
 
-    // Refs
-    const linkRef = db.doc(`users/${mainUserId}/emergency_contact/${emergencyContactUid}`);
-    const emergencyContactId = `${mainUserId}_${invitedEmail}`;
+    // --- Prepare references we will write ---
+    // Link doc lives under the main user's doc; id = emergencyContactUid (simple & unique)
+    const linkRef = db.doc(`users/${mainUserUid}/emergency_contact/${emergencyContactUid}`);
+
+    // Optional top-level join/analytics doc (handy for admin/queries)
+    const emergencyContactId = `${mainUserUid}_${invitedEmail}`;
     const emergencyContactRef = db.doc(`emergencyContacts/${emergencyContactId}`);
 
-    // Read once so we can set createdAt only on first create
+    // Read existing docs once so we can set createdAt only on first create
     const [linkSnap, ecSnap] = await Promise.all([linkRef.get(), emergencyContactRef.get()]);
 
-    // Batch writes
+    // --- Batch all writes for atomicity ---
     const batch = db.batch();
 
-    // Upsert link doc (dashboard consumes this via collectionGroup)
+    // Upsert the link doc used by your dashboards and listeners
     const linkPayload: any = {
-      uid: emergencyContactUid, // required for where("uid","==", user.uid)
-      mainUserId: mainUserId,
+      // 🔑 canonical field used by collectionGroup queries:
+      //    where("emergencyContactUid", "==", <user.uid>)
+      emergencyContactUid,
+      // Helpful denormalized info
+      mainUserUid,
       emergencyContactEmail: signedInEmail,
       mainUserName: mainUserName || "",
       mainUserAvatar: mainUserAvatar || "",
       status: "ACTIVE",
       updatedAt: FieldValue.serverTimestamp(),
-      inviteId: inviteRef!.id, // pointer only (no secrets)
+      inviteId: inviteRef!.id, // pointer only, no secrets
     };
     if (!linkSnap.exists) linkPayload.createdAt = FieldValue.serverTimestamp();
     batch.set(linkRef, linkPayload, { merge: true });
 
-    // Mark invite accepted (idempotent repair if it was already accepted)
+    // Mark invite accepted (idempotent if already accepted)
     if (!alreadyAcceptedByThisUser) {
       batch.update(inviteRef!, {
         status: "accepted",
@@ -145,11 +183,11 @@ export async function POST(req: NextRequest) {
       });
     }
 
-    // Upsert top-level summary/join doc
+    // Upsert optional top-level summary/join doc
     const ecPayload: any = {
       id: emergencyContactId,
-      mainUserId,
-      emergencyContactUid,
+      mainUserUid,                // 🔁 standardized naming
+      emergencyContactUid,        // 🔁 standardized naming
       emergencyContactEmail: invitedEmail,
       status: "ACTIVE",
       updatedAt: FieldValue.serverTimestamp(),
@@ -158,10 +196,13 @@ export async function POST(req: NextRequest) {
     if (!alreadyAcceptedByThisUser) ecPayload.acceptedAt = FieldValue.serverTimestamp();
     batch.set(emergencyContactRef, ecPayload, { merge: true });
 
+    // Commit all writes
     await batch.commit();
 
-    return NextResponse.json({ ok: true, mainUserId, alreadyAccepted: alreadyAcceptedByThisUser });
+    // Respond with ok + who you got linked to
+    return NextResponse.json({ ok: true, mainUserUid, alreadyAccepted: alreadyAcceptedByThisUser });
   } catch (e: any) {
+    // Map common auth errors to HTTP status codes
     if (e?.message === "UNAUTHENTICATED") {
       return NextResponse.json({ error: "Unauthenticated" }, { status: 401 });
     }

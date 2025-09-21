@@ -21,52 +21,36 @@ import {
 } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
 import { useToast } from "@/hooks/use-toast";
-import { db, auth } from "@/firebase";
-import {
-  doc,
-  getDoc,
-  setDoc,
-  collectionGroup,
-  query,
-  where,
-  getDocs,
-  writeBatch,
-  collection,
-  serverTimestamp,
-} from "firebase/firestore";
-import {
-  reauthenticateWithCredential,
-  EmailAuthProvider,
-  updatePassword,
-} from "firebase/auth";
-
+import { db } from "@/firebase";
+import { doc, getDoc, setDoc, serverTimestamp } from "firebase/firestore";
 import { Pencil, Check, X } from "lucide-react";
 
+// -------------------- Props --------------------
 interface Props {
-  contactUid: string;
+  /** Canonical prop name for the signed-in emergency contact UID */
+  emergencyContactUid: string;
   open: boolean;
   onOpenChange: (open: boolean) => void;
 }
 
 export function EmergencyContactSettingsDialog({
-  contactUid,
+  emergencyContactUid,
   open,
   onOpenChange,
 }: Props) {
   const { toast } = useToast();
 
-  // Profile state
+  // -------------------- Local state --------------------
+  // Profile
   const [firstName, setFirstName] = useState("");
   const [lastName, setLastName] = useState("");
   const [email, setEmail] = useState("");
   const [phone, setPhone] = useState("");
-
   const [editField, setEditField] = useState<string | null>(null);
 
   // Notifications
-  const [defaultChannel, setDefaultChannel] = useState<"push" | "email" | "sms">(
-    "push"
-  );
+  const [defaultChannel, setDefaultChannel] =
+    useState<"push" | "email" | "sms">("push");
   const [quietHoursEnabled, setQuietHoursEnabled] = useState(false);
   const [quietStart, setQuietStart] = useState("22:00");
   const [quietEnd, setQuietEnd] = useState("07:00");
@@ -75,30 +59,32 @@ export function EmergencyContactSettingsDialog({
   // Escalation
   const [escalationEnabled, setEscalationEnabled] = useState(false);
   const [escalationMinutes, setEscalationMinutes] = useState<number | "">("");
-  const [escalationContactUids, setEscalationContactUids] = useState<string[]>([]);
+  const [escalationContactUids, setEscalationContactUids] = useState<string[]>(
+    []
+  );
 
   // Repeats
-  const [repeatEveryMinutes, setRepeatEveryMinutes] = useState<number | "">("");
-  const [maxRepeatsPerWindow, setMaxRepeatsPerWindow] = useState<number | "">("");
+  const [repeatEveryMinutes, setRepeatEveryMinutes] = useState<number | "">(
+    ""
+  );
+  const [maxRepeatsPerWindow, setMaxRepeatsPerWindow] = useState<number | "">(
+    ""
+  );
 
   // App prefs
   const [darkModeEnabled, setDarkModeEnabled] = useState(false);
   const [language, setLanguage] = useState("en");
   const [timeZone, setTimeZone] = useState("");
 
-  // Password
-  const [currentPassword, setCurrentPassword] = useState("");
-  const [newPassword, setNewPassword] = useState("");
-  const [confirmPassword, setConfirmPassword] = useState("");
   const [saving, setSaving] = useState(false);
 
-  // Load profile
+  // -------------------- Load profile --------------------
   useEffect(() => {
-    if (!open || !contactUid) return;
+    if (!open || !emergencyContactUid) return;
 
     (async () => {
       try {
-        const userRef = doc(db, "users", contactUid);
+        const userRef = doc(db, "users", emergencyContactUid);
         const snap = await getDoc(userRef);
         if (snap.exists()) {
           const d = snap.data() as any;
@@ -135,26 +121,9 @@ export function EmergencyContactSettingsDialog({
         });
       }
     })();
-  }, [open, contactUid, toast]);
+  }, [open, emergencyContactUid, toast]);
 
-  // Find linked main users
-  async function findLinkedMainUsers() {
-    const q = query(
-      collectionGroup(db, "emergency_contact"),
-      where("uid", "==", contactUid)
-    );
-    const snap = await getDocs(q);
-    const res: { mainUserUid: string; docRefPath: string }[] = [];
-    snap.forEach((d) => {
-      const mainUserId = d.ref.parent.parent?.id;
-      if (mainUserId) {
-        res.push({ mainUserUid: mainUserId, docRefPath: d.ref.path });
-      }
-    });
-    return res;
-  }
-
-  // Validation helper
+  // -------------------- Validation --------------------
   const validateInputs = () => {
     if (!firstName.trim() || !lastName.trim()) {
       toast({
@@ -183,9 +152,9 @@ export function EmergencyContactSettingsDialog({
     return true;
   };
 
-  // Save handler
+  // -------------------- Save handler --------------------
   const handleSave = async () => {
-    if (!contactUid) return;
+    if (!emergencyContactUid) return;
     if (!validateInputs()) return;
 
     setSaving(true);
@@ -222,32 +191,30 @@ export function EmergencyContactSettingsDialog({
         data.quietEnd = null;
       }
 
-      // Update own profile
-      const contactRef = doc(db, "users", contactUid);
+      // 1) Update my own profile (allowed by rules)
+      const contactRef = doc(db, "users", emergencyContactUid);
       await setDoc(contactRef, data, { merge: true });
 
-      // Update linked main users (dashboard view)
-      const linked = await findLinkedMainUsers();
-      if (linked.length > 0) {
-        const batch = writeBatch(db);
-        for (const l of linked) {
-          const ecRef = doc(db, l.docRefPath);
-          batch.set(
-            ecRef,
-            { name: fullName, email, phone, updatedAt: serverTimestamp() },
-            { merge: true }
-          );
-          const notifRef = collection(db, "users", l.mainUserUid, "notifications");
-          batch.set(doc(notifRef), {
-            type: "contact_updated",
-            title: "Emergency contact updated",
-            body: `${fullName} updated their info.`,
-            data: { contactUid, contactName: fullName },
-            createdAt: serverTimestamp(),
-            read: false,
-          });
+      // 2) Ask server to fan-out my details to linked main users (server has admin perms)
+      try {
+        const res = await fetch("/api/emergency_contact/sync_profile", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          credentials: "include",
+          body: JSON.stringify({
+            emergencyContactUid,
+            name: fullName,
+            email,
+            phone,
+          }),
+        });
+        if (!res.ok) {
+          const { error } = await res.json().catch(() => ({}));
+          throw new Error(error || "Sync failed");
         }
-        await batch.commit();
+      } catch (e) {
+        // Non-fatal: my own profile is already saved; dashboard links will catch up later.
+        console.error("Server sync failed:", e);
       }
 
       toast({ title: "Saved", description: "Settings updated and synced." });
@@ -264,7 +231,7 @@ export function EmergencyContactSettingsDialog({
     }
   };
 
-  // Editable field helper
+  // -------------------- UI helpers --------------------
   const renderEditableField = (
     label: string,
     value: string,
@@ -278,17 +245,32 @@ export function EmergencyContactSettingsDialog({
         {isEditing ? (
           <>
             <Input value={value} onChange={(e) => onChange(e.target.value)} />
-            <Button size="icon" variant="ghost" onClick={() => setEditField(null)}>
+            <Button
+              size="icon"
+              variant="ghost"
+              onClick={() => setEditField(null)}
+              aria-label="Save"
+            >
               <Check className="w-4 h-4" />
             </Button>
-            <Button size="icon" variant="ghost" onClick={() => setEditField(null)}>
+            <Button
+              size="icon"
+              variant="ghost"
+              onClick={() => setEditField(null)}
+              aria-label="Cancel"
+            >
               <X className="w-4 h-4" />
             </Button>
           </>
         ) : (
           <>
             <span className="flex-1 text-sm">{value || "—"}</span>
-            <Button size="icon" variant="ghost" onClick={() => setEditField(fieldKey)}>
+            <Button
+              size="icon"
+              variant="ghost"
+              onClick={() => setEditField(fieldKey)}
+              aria-label={`Edit ${label}`}
+            >
               <Pencil className="w-4 h-4" />
             </Button>
           </>
@@ -297,6 +279,7 @@ export function EmergencyContactSettingsDialog({
     </div>
   );
 
+  // -------------------- Render --------------------
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="sm:max-w-[640px] max-h-[80vh] overflow-y-auto">
@@ -472,7 +455,11 @@ export function EmergencyContactSettingsDialog({
         </div>
 
         <div className="flex justify-end gap-2 mt-6">
-          <Button variant="outline" onClick={() => onOpenChange(false)} disabled={saving}>
+          <Button
+            variant="outline"
+            onClick={() => onOpenChange(false)}
+            disabled={saving}
+          >
             Cancel
           </Button>
           <Button onClick={handleSave} disabled={saving}>

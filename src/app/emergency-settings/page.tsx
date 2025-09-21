@@ -11,7 +11,11 @@ import EmergencyContactSettingsDialog from "@/components/EmergencyContactSetting
 
 export default function EmergencySettingsPage() {
   const router = useRouter();
-  const [uid, setUid] = useState<string | null>(null);
+
+  // ✅ canonical id for the signed-in emergency contact
+  const [emergencyContactUid, setEmergencyContactUid] = useState<string | null>(null);
+
+  // open dialog on page load
   const [open, setOpen] = useState(true);
 
   useEffect(() => {
@@ -22,6 +26,8 @@ export default function EmergencySettingsPage() {
         );
         return;
       }
+
+      // ✅ gate access by role
       try {
         const meSnap = await getDoc(doc(db, "users", user.uid));
         const myRole = normalizeRole(meSnap.exists() ? (meSnap.data() as any).role : undefined);
@@ -35,16 +41,19 @@ export default function EmergencySettingsPage() {
         );
         return;
       }
-      setUid(user.uid);
+
+      setEmergencyContactUid(user.uid);
     });
+
     return () => unsub();
   }, [router]);
 
   return (
     <div className="min-h-screen bg-secondary">
-      {uid && (
+      {emergencyContactUid && (
         <EmergencyContactSettingsDialog
-          contactUid={uid}
+          // ✅ renamed prop to canonical name
+          emergencyContactUid={emergencyContactUid}
           open={open}
           onOpenChange={(v) => {
             setOpen(v);

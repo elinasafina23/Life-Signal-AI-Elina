@@ -1,322 +1,312 @@
 // src/components/emergency-contact.tsx
-"use client"; // Ensures this component runs on the client side (Next.js app router).
+"use client"; // This file runs in the browser (not on the server).
 
-// React
-import { useEffect, useState } from "react"; // React hooks for lifecycle and state.
+/* ---------------- React ---------------- */
+import { useEffect, useState } from "react";
 
-// Firebase Auth
-import { onAuthStateChanged } from "firebase/auth"; // Listen to auth state changes.
+/* ---------------- Firebase ---------------- */
+// Auth: listen for sign-in / sign-out so we know who the main user is.
+import { onAuthStateChanged } from "firebase/auth";
+// Firestore: read/write the signed-in user's document.
+import { doc, getDoc, setDoc, deleteField } from "firebase/firestore";
+import { auth, db } from "@/firebase";
 
-// Firestore
-import { doc, getDoc, setDoc, deleteField } from "firebase/firestore"; // Read/write to Firestore.
-import { auth, db } from "@/firebase"; // Your initialized Firebase instances.
+/* ---------------- Forms & Validation ---------------- */
+// React Hook Form handles form state. Zod validates the fields.
+import { useForm } from "react-hook-form";
+import { zodResolver } from "@hookform/resolvers/zod";
+import * as z from "zod";
 
-// Forms & validation
-import { useForm } from "react-hook-form"; // Form state & handlers.
-import { zodResolver } from "@hookform/resolvers/zod"; // Zod resolver for RHF.
-import * as z from "zod"; // Zod runtime validation.
-
-// UI components
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"; // Card primitives.
-import { Button } from "@/components/ui/button"; // Button component.
+/* ---------------- UI kit ---------------- */
+import {
+  Card, CardContent, CardDescription, CardHeader, CardTitle,
+} from "@/components/ui/card";
+import { Button } from "@/components/ui/button";
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle,
-  DialogTrigger, DialogFooter, DialogClose
-} from "@/components/ui/dialog"; // Dialog primitives.
-import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from "@/components/ui/form"; // RHF + UI bindings.
-import { Input } from "@/components/ui/input"; // Text input.
-import { useToast } from "@/hooks/use-toast"; // Toast notifications.
-import { User, Phone, Mail, Pencil } from "lucide-react"; // Icons.
+  DialogTrigger, DialogFooter, DialogClose,
+} from "@/components/ui/dialog";
+import {
+  Form, FormControl, FormField, FormItem, FormLabel, FormMessage,
+} from "@/components/ui/form";
+import { Input } from "@/components/ui/input";
+import { useToast } from "@/hooks/use-toast";
+import { User, Phone, Mail, Pencil } from "lucide-react";
 
-// Invites helper
-import { inviteEmergencyContact as sendInvite } from "@/lib/inviteEmergencyContact"; // Helper that creates invite docs/emails.
+/* ---------------- Invites ---------------- */
+// Helper that creates an invite (writes Firestore + sends email).
+import { inviteEmergencyContact as sendInvite } from "@/lib/inviteEmergencyContact";
 
-// ---------- Validation ----------
+/* ============================================================================
+   Validation (Zod)
+   ========================================================================== */
 
-// Name parts: allow unicode letters, spaces, hyphens, apostrophes.
+// First/last name rules: letters, spaces, hyphens, apostrophes. Required.
 const namePartValidation = z
-  .string() // Expect a string.
-  .min(1, { message: "This field is required" }) // Must not be empty.
-  .regex(/^[\p{L}\s'-]+$/u, { message: "Only letters, spaces, hyphens, apostrophes." }); // Restrict characters.
+  .string()
+  .min(1, { message: "This field is required" })
+  .regex(/^[\p{L}\s'-]+$/u, { message: "Only letters, spaces, hyphens, apostrophes." });
 
-// E.164-ish phone (loose): +, no leading 0, 7–15 digits total.
+// Phone: simple E.164-style check: optional leading +, 7–15 digits, no leading 0.
 const phoneValidation = z
-  .string() // Expect a string.
-  .min(1, { message: "Phone number is required" }) // Must not be empty.
-  .regex(/^\+?[1-9]\d{6,14}$/, { message: "Invalid phone number format." }); // Validate number.
+  .string()
+  .min(1, { message: "Phone number is required" })
+  .regex(/^\+?[1-9]\d{6,14}$/, { message: "Invalid phone number format." });
 
-// Optional phone with looser min (for contact 2 optionality).
+// Contact 2 phone can be blank; if present, must be valid.
 const optionalPhoneValidation = z
   .string()
   .regex(/^\+?[1-9]\d{1,14}$/, { message: "Invalid phone number format." });
 
-// Form schema with first/last names for each contact.
+// Schema describing the dialog form.
 const emergencyContactsSchema = z
   .object({
     // Contact 1 (required)
-    contact1_firstName: namePartValidation, // First name required.
-    contact1_lastName: namePartValidation, // Last name required.
-    contact1_email: z.string().email({ message: "Invalid email address." }), // Email required.
-    contact1_phone: phoneValidation, // Phone required.
+    contact1_firstName: namePartValidation,
+    contact1_lastName:  namePartValidation,
+    contact1_email:     z.string().email({ message: "Invalid email address." }),
+    contact1_phone:     phoneValidation,
 
-    // Contact 2 (optional as a group)
-    contact2_firstName: z.string().optional().or(z.literal("")), // Optional first name.
-    contact2_lastName: z.string().optional().or(z.literal("")), // Optional last name.
-    contact2_email: z.string().email({ message: "Invalid email address." }).optional().or(z.literal("")), // Optional email.
-    contact2_phone: optionalPhoneValidation.optional().or(z.literal("")), // Optional phone.
+    // Contact 2 (optional — either fill ALL its fields, or leave all blank)
+    contact2_firstName: z.string().optional().or(z.literal("")),
+    contact2_lastName:  z.string().optional().or(z.literal("")),
+    contact2_email:     z.string().email({ message: "Invalid email address." }).optional().or(z.literal("")),
+    contact2_phone:     optionalPhoneValidation.optional().or(z.literal("")),
   })
   .refine((v) => {
-    // If any of contact 2 fields are provided, all must be provided.
     const any =
       !!(v.contact2_firstName || v.contact2_lastName || v.contact2_email || v.contact2_phone);
     const all =
       !!(v.contact2_firstName && v.contact2_lastName && v.contact2_email && v.contact2_phone);
-    return !any || all; // Valid if none or all are filled.
+    return !any || all; // valid if none or all are filled
   }, { message: "Provide all fields for Contact 2 or leave them all blank." });
 
-// Types inferred from schema.
 type EmergencyContactsFormValues = z.infer<typeof emergencyContactsSchema>;
 
-// Initial empty values.
+// What we show before Firestore loads.
 const initialContacts: EmergencyContactsFormValues = {
-  contact1_firstName: "", // C1 first name initial value.
-  contact1_lastName: "", // C1 last name initial value.
-  contact1_email: "", // C1 email initial value.
-  contact1_phone: "", // C1 phone initial value.
-
-  contact2_firstName: "", // C2 first name initial value.
-  contact2_lastName: "", // C2 last name initial value.
-  contact2_email: "", // C2 email initial value.
-  contact2_phone: "", // C2 phone initial value.
+  contact1_firstName: "",
+  contact1_lastName:  "",
+  contact1_email:     "",
+  contact1_phone:     "",
+  contact2_firstName: "",
+  contact2_lastName:  "",
+  contact2_email:     "",
+  contact2_phone:     "",
 };
 
-// Utility: join first + last into a display name.
+/* ============================================================================
+   Small helpers
+   ========================================================================== */
+
+// Join first + last into a nice display name.
 function fullName(first?: string, last?: string) {
-  // Trim parts, join with space, and fallback to em dash if empty.
   const f = (first || "").trim();
-  const l = (last || "").trim();
+  const l = (last  || "").trim();
   const joined = [f, l].filter(Boolean).join(" ");
   return joined || "—";
 }
 
-// Component export
-export function EmergencyContacts() {
-  const { toast } = useToast(); // Toast API.
-  const [uid, setUid] = useState<string | null>(null); // Current user id.
-  const [contacts, setContacts] = useState<EmergencyContactsFormValues>(initialContacts); // Display state from Firestore.
-  const [isDialogOpen, setIsDialogOpen] = useState(false); // Dialog open state.
-  const [loaded, setLoaded] = useState(false); // Prevents UI flash before load.
-  const [resending, setResending] = useState<string | null>(null); // Email being re-sent.
+// Normalize emails for comparisons.
+const normEmail = (e?: string | null) => (e || "").trim().toLowerCase();
 
-  // React Hook Form instance, seeded by current contacts.
+/* ============================================================================
+   Component
+   ========================================================================== */
+
+export function EmergencyContacts() {
+  const { toast } = useToast();
+
+  // The signed-in **main user** uid (this is your canonical mainUserUid).
+  const [uid, setUid] = useState<string | null>(null);
+
+  // What we display on the card (kept in sync with Firestore).
+  const [contacts, setContacts] = useState<EmergencyContactsFormValues>(initialContacts);
+
+  // Dialog open/closed state.
+  const [isDialogOpen, setIsDialogOpen] = useState(false);
+
+  // When false, we show a small skeleton instead of empty UI.
+  const [loaded, setLoaded] = useState(false);
+
+  // Which email is being re-sent right now (to disable its button).
+  const [resending, setResending] = useState<string | null>(null);
+
+  // React Hook Form instance seeded with whatever we’re showing.
   const form = useForm<EmergencyContactsFormValues>({
-    resolver: zodResolver(emergencyContactsSchema), // Hook zod into RHF.
-    defaultValues: contacts, // Use display state as defaults.
+    resolver: zodResolver(emergencyContactsSchema),
+    defaultValues: contacts,
   });
 
-  // Firestore load on auth change.
+  /* ---------------- Load Firestore on auth change ---------------- */
   useEffect(() => {
-    // Subscribe to auth state.
     const unsub = onAuthStateChanged(auth, async (user) => {
-      // If logged out, reset local state and mark loaded.
       if (!user) {
-        setUid(null); // Clear uid.
-        setContacts(initialContacts); // Reset contacts.
-        setLoaded(true); // Show UI as loaded.
-        return; // Exit.
+        // Signed out → clear everything.
+        setUid(null);
+        setContacts(initialContacts);
+        setLoaded(true);
+        return;
       }
 
-      // Otherwise, set uid and load their doc.
+      // Signed in → remember their uid (this is the mainUserUid).
       setUid(user.uid);
 
       try {
-        // Fetch user document.
+        // Load the user's document (where we store emergencyContacts object).
         const snap = await getDoc(doc(db, "users", user.uid));
-        const data = snap.data() as any; // Firestore doc data.
-        const saved = data?.emergencyContacts; // The sub-object for contacts.
+        const data = snap.data() as any;
+        const saved = data?.emergencyContacts;
 
-        // If we have saved contacts, map to new shape (supports legacy "contactX_name").
         if (saved) {
-          // Attempt to split legacy name (e.g., "Jane Doe") into first/last if needed.
+          // Legacy support: if old "contactX_name" exists, split into first/last.
           const splitName = (name?: string) => {
             const s = (name || "").trim();
             if (!s) return { first: "", last: "" };
             const parts = s.split(/\s+/);
             if (parts.length === 1) return { first: parts[0], last: "" };
             const last = parts.pop() || "";
-            const first = parts.join(" ");
-            return { first, last };
+            return { first: parts.join(" "), last };
           };
 
-          // Map contact 1 (legacy fallbacks)
           const legacyC1 = splitName(saved.contact1_name);
-          // Map contact 2 (legacy fallbacks)
           const legacyC2 = splitName(saved.contact2_name);
 
-          // Fill new fields preferring explicit first/last if present, else split legacy.
           const next: EmergencyContactsFormValues = {
             contact1_firstName: saved.contact1_firstName ?? legacyC1.first ?? "",
-            contact1_lastName: saved.contact1_lastName ?? legacyC1.last ?? "",
-            contact1_email: saved.contact1_email ?? "",
-            contact1_phone: saved.contact1_phone ?? "",
-
+            contact1_lastName:  saved.contact1_lastName  ?? legacyC1.last  ?? "",
+            contact1_email:     saved.contact1_email     ?? "",
+            contact1_phone:     saved.contact1_phone     ?? "",
             contact2_firstName: saved.contact2_firstName ?? legacyC2.first ?? "",
-            contact2_lastName: saved.contact2_lastName ?? legacyC2.last ?? "",
-            contact2_email: saved.contact2_email ?? "",
-            contact2_phone: saved.contact2_phone ?? "",
+            contact2_lastName:  saved.contact2_lastName  ?? legacyC2.last  ?? "",
+            contact2_email:     saved.contact2_email     ?? "",
+            contact2_phone:     saved.contact2_phone     ?? "",
           };
 
-          // Push to display state.
           setContacts(next);
         } else {
-          // No saved data; reset to blank.
           setContacts(initialContacts);
         }
       } catch (e) {
-        // Surface error to console; UI stays functional.
         console.error("Failed to load emergency contacts:", e);
       } finally {
-        // Mark as loaded in all cases.
         setLoaded(true);
       }
     });
 
-    // Cleanup subscription on unmount.
     return () => unsub();
-  }, []); // Run once.
+  }, []);
 
-  // When dialog opens, reset RHF form to latest Firestore-backed state.
+  // Keep the form fields in sync with whatever we’re showing when the dialog opens.
   useEffect(() => {
-    if (isDialogOpen) form.reset(contacts); // Keep form in sync.
-  }, [isDialogOpen, contacts, form]); // Re-run when dialog toggles or contacts change.
+    if (isDialogOpen) form.reset(contacts);
+  }, [isDialogOpen, contacts, form]);
 
-  // Save + auto-invite on new/changed emails.
+  /* ---------------- Save handler (also sends invites) ---------------- */
   const onSubmit = async (data: EmergencyContactsFormValues) => {
-    // Must be signed in to save.
     if (!uid) {
       toast({ title: "Not signed in", description: "Please sign in to save.", variant: "destructive" });
       setIsDialogOpen(false);
       return;
     }
 
-    // Normalize/trim all inputs.
+    // Trim all fields.
     const c1 = {
       contact1_firstName: data.contact1_firstName.trim(),
-      contact1_lastName: data.contact1_lastName.trim(),
-      contact1_email: data.contact1_email.trim(),
-      contact1_phone: data.contact1_phone.trim(),
+      contact1_lastName:  data.contact1_lastName.trim(),
+      contact1_email:     data.contact1_email.trim(),
+      contact1_phone:     data.contact1_phone.trim(),
     };
-
     const c2 = {
       contact2_firstName: data.contact2_firstName?.trim() ?? "",
-      contact2_lastName: data.contact2_lastName?.trim() ?? "",
-      contact2_email: data.contact2_email?.trim() ?? "",
-      contact2_phone: data.contact2_phone?.trim() ?? "",
+      contact2_lastName:  data.contact2_lastName?.trim() ?? "",
+      contact2_email:     data.contact2_email?.trim() ?? "",
+      contact2_phone:     data.contact2_phone?.trim() ?? "",
     };
 
-    // Determine if contact 2 is fully empty.
+    // If ALL contact 2 fields are blank, we’ll remove them from Firestore.
     const c2Empty = !c2.contact2_firstName && !c2.contact2_lastName && !c2.contact2_email && !c2.contact2_phone;
 
     try {
-      // 1) Save to Firestore: if C2 empty, clear those fields with deleteField().
+      // 1) Write to Firestore under users/{mainUserUid}.emergencyContacts
       if (c2Empty) {
         await setDoc(
-          doc(db, "users", uid), // Target user doc.
+          doc(db, "users", uid),
           {
             emergencyContacts: {
-              ...c1, // Save C1 fields.
-              contact2_firstName: deleteField(), // Clear C2 fields.
-              contact2_lastName: deleteField(),
-              contact2_email: deleteField(),
-              contact2_phone: deleteField(),
-              // (Optional) also clear any legacy name fields if present
-              contact1_name: deleteField(),
-              contact2_name: deleteField(),
+              ...c1,
+              contact2_firstName: deleteField(),
+              contact2_lastName:  deleteField(),
+              contact2_email:     deleteField(),
+              contact2_phone:     deleteField(),
+              // Nuke legacy single-name fields if they exist.
+              contact1_name:      deleteField(),
+              contact2_name:      deleteField(),
             },
           },
-          { merge: true } // Merge to avoid overwriting unrelated data.
+          { merge: true }
         );
-
-        // Update local display state to reflect cleared C2.
         setContacts({ ...c1, contact2_firstName: "", contact2_lastName: "", contact2_email: "", contact2_phone: "" });
       } else {
-        // Save both contacts when C2 provided.
         await setDoc(
           doc(db, "users", uid),
           {
             emergencyContacts: {
               ...c1,
               ...c2,
-              // (Optional) also clear any legacy name fields if present
               contact1_name: deleteField(),
               contact2_name: deleteField(),
             },
           },
           { merge: true }
         );
-
-        // Update local display state to new values.
         setContacts({ ...c1, ...c2 });
       }
 
-      // 2) Send invite emails only when the email changed or is new.
-      const invitePromises: Promise<any>[] = [];
+      // 2) Send invites only if the email is new/changed.
+      const inviteJobs: Promise<unknown>[] = [];
 
-      // Contact 1 comparison (prev vs next).
-      const prevC1 = contacts.contact1_email?.trim().toLowerCase() || "";
-      const nextC1 = c1.contact1_email.toLowerCase();
+      const prevC1 = normEmail(contacts.contact1_email);
+      const nextC1 = normEmail(c1.contact1_email);
       if (!prevC1 || prevC1 !== nextC1) {
-        // Compose full name for C1.
-        const name = fullName(c1.contact1_firstName, c1.contact1_lastName);
-        invitePromises.push(
+        inviteJobs.push(
           sendInvite({
-            name, // Use first + last.
+            // The server uses (mainUserUid, email) to build the link doc and invite.
+            name: fullName(c1.contact1_firstName, c1.contact1_lastName),
             email: c1.contact1_email,
             relation: "primary",
           })
         );
       }
 
-      // Contact 2 comparison (only if not empty).
-      if (!c2Empty && c2.contact2_email) {
-        const prevC2 = contacts.contact2_email?.trim().toLowerCase() || "";
-        const nextC2 = c2.contact2_email.toLowerCase();
-        if (!prevC2 || prevC2 !== nextC2) {
-          // Compose full name for C2.
-          const name = fullName(c2.contact2_firstName, c2.contact2_lastName);
-          invitePromises.push(
-            sendInvite({
-              name, // Use first + last.
-              email: c2.contact2_email,
-              relation: "secondary",
-            })
-          );
-        }
+      const prevC2 = normEmail(contacts.contact2_email);
+      const nextC2 = normEmail(c2.contact2_email);
+      if (!c2Empty && nextC2 && (!prevC2 || prevC2 !== nextC2)) {
+        inviteJobs.push(
+          sendInvite({
+            name: fullName(c2.contact2_firstName, c2.contact2_lastName),
+            email: c2.contact2_email,
+            relation: "secondary",
+          })
+        );
       }
 
-      // Await and toast result.
-      if (invitePromises.length) {
-        await Promise.all(invitePromises);
-        toast({
-          title: "Invites sent",
-          description: "We emailed your emergency contact(s) an invitation.",
-        });
+      if (inviteJobs.length) {
+        await Promise.all(inviteJobs);
+        toast({ title: "Invites sent", description: "We emailed your emergency contact(s) an invitation." });
       } else {
         toast({ title: "Saved", description: "Emergency contacts updated successfully." });
       }
 
-      // Close the dialog after saving.
       setIsDialogOpen(false);
     } catch (e: any) {
-      // Bubble up error.
       console.error("Save failed:", e);
       toast({ title: "Save failed", description: e?.message ?? String(e), variant: "destructive" });
     }
   };
 
-  // Manual resend handler — reuses the invite helper to rotate a fresh invite.
+  /* ---------------- Manual resend (send a fresh invite) ---------------- */
   const handleResend = async (email?: string | null) => {
-    // Normalize email target.
     const target = (email || "").trim();
     if (!target) {
       toast({ title: "Missing email", description: "Add an email first, then try again.", variant: "destructive" });
@@ -324,36 +314,30 @@ export function EmergencyContacts() {
     }
 
     try {
-      // Mark which email is being resent to disable the button.
-      setResending(target.toLowerCase());
-
-      // Identify contact by email to determine relation and name.
-      const isC1 = target.toLowerCase() === (contacts.contact1_email || "").toLowerCase();
+      setResending(normEmail(target));
+      const isC1 = normEmail(target) === normEmail(contacts.contact1_email);
       const relation = isC1 ? "primary" : "secondary";
       const name = isC1
         ? fullName(contacts.contact1_firstName, contacts.contact1_lastName)
         : fullName(contacts.contact2_firstName, contacts.contact2_lastName);
 
-      // Send invite.
       await sendInvite({ email: target, name, relation });
       toast({ title: "Invite sent", description: `We sent a new invite to ${target}.` });
     } catch (e: any) {
-      // Error toast.
       toast({ title: "Could not resend", description: e?.message ?? "Please try again.", variant: "destructive" });
     } finally {
-      // Clear resending state.
       setResending(null);
     }
   };
 
-  // Show Contact 2 section only if any of its fields are present.
+  /* ---------------- Derived flags ---------------- */
   const hasContact2 =
     !!contacts.contact2_firstName?.trim() ||
-    !!contacts.contact2_lastName?.trim() ||
-    !!contacts.contact2_email?.trim() ||
+    !!contacts.contact2_lastName?.trim()  ||
+    !!contacts.contact2_email?.trim()     ||
     !!contacts.contact2_phone?.trim();
 
-  // Skeleton card while loading Firestore.
+  /* ---------------- Skeleton while loading ---------------- */
   if (!loaded) {
     return (
       <Card className="shadow-lg">
@@ -366,18 +350,16 @@ export function EmergencyContacts() {
     );
   }
 
-  // Main render.
+  /* ---------------- Render ---------------- */
   return (
     <Card className="shadow-lg">
-      {/* Header with title and edit button */}
+      {/* Header + edit button (opens dialog) */}
       <CardHeader className="flex flex-row items-center justify-between">
-        {/* Title/description */}
         <div>
           <CardTitle className="text-2xl font-headline">Emergency Contacts</CardTitle>
           <CardDescription>Your designated points of contact.</CardDescription>
         </div>
 
-        {/* Edit dialog trigger + content */}
         <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
           <DialogTrigger asChild>
             <Button variant="outline" size="icon" aria-label="Edit emergency contacts">
@@ -385,7 +367,7 @@ export function EmergencyContacts() {
             </Button>
           </DialogTrigger>
 
-          {/* NOTE: max-h limits height to viewport; overflow-y enables scrolling */}
+          {/* The dialog content is scrollable on small screens */}
           <DialogContent className="w-[95vw] sm:max-w-[480px] max-h-[90vh] overflow-y-auto p-0">
             <DialogHeader className="p-6 pb-4">
               <DialogTitle>Edit Emergency Contacts</DialogTitle>
@@ -393,9 +375,8 @@ export function EmergencyContacts() {
 
             <Form {...form}>
               <form onSubmit={form.handleSubmit(onSubmit)} className="flex flex-col gap-0">
-                {/* Scrollable form body (DialogContent handles the scrolling; no overflow here) */}
                 <div className="px-6 pb-6 space-y-4">
-                  {/* Contact 1 */}
+                  {/* Contact 1 (required) */}
                   <div className="space-y-4 border p-4 rounded-lg">
                     <FormLabel className="font-bold">Emergency Contact 1</FormLabel>
 
@@ -432,7 +413,7 @@ export function EmergencyContacts() {
                     )} />
                   </div>
 
-                  {/* Contact 2 */}
+                  {/* Contact 2 (optional) */}
                   <div className="space-y-4 border p-4 rounded-lg">
                     <FormLabel className="font-bold">Emergency Contact 2 (Optional)</FormLabel>
 
@@ -470,7 +451,7 @@ export function EmergencyContacts() {
                   </div>
                 </div>
 
-                {/* Sticky footer so buttons are always visible */}
+                {/* Sticky footer buttons */}
                 <DialogFooter className="sticky bottom-0 bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60 p-4 border-t mt-0">
                   <DialogClose asChild>
                     <Button type="button" variant="secondary">Cancel</Button>
@@ -483,78 +464,62 @@ export function EmergencyContacts() {
         </Dialog>
       </CardHeader>
 
-      {/* Body content displaying the contacts */}
+      {/* Read-only display of saved contacts */}
       <CardContent className="space-y-6">
-        {/* Contact 1 display + resend */}
+        {/* Contact 1 */}
         <div className="space-y-2">
           <h4 className="font-semibold">Contact 1</h4>
-
-          {/* Name */}
           <div className="flex items-center gap-3 text-muted-foreground">
             <User className="h-5 w-5" />
             <span>{fullName(contacts.contact1_firstName, contacts.contact1_lastName)}</span>
           </div>
-
-          {/* Email */}
           <div className="flex items-center gap-3 text-muted-foreground">
             <Mail className="h-5 w-5" />
             <span>{contacts.contact1_email || "—"}</span>
           </div>
-
-          {/* Phone */}
           <div className="flex items-center gap-3 text-muted-foreground">
             <Phone className="h-5 w-5" />
             <span>{contacts.contact1_phone || "—"}</span>
           </div>
-
-          {/* Resend button (only if email present) */}
           {!!contacts.contact1_email && (
             <div className="pt-2">
               <Button
                 size="sm"
                 variant="outline"
                 onClick={() => handleResend(contacts.contact1_email)}
-                disabled={resending === contacts.contact1_email.toLowerCase()}
+                disabled={resending === normEmail(contacts.contact1_email)}
               >
-                {resending === contacts.contact1_email.toLowerCase() ? "Sending…" : "Resend invite"}
+                {resending === normEmail(contacts.contact1_email) ? "Sending…" : "Resend invite"}
               </Button>
             </div>
           )}
         </div>
 
-        {/* Contact 2 display + resend (only if present) */}
-        {hasContact2 && (
+        {/* Contact 2 (only shown if any of its fields exist) */}
+        {(!!hasContact2) && (
           <div className="space-y-2 border-t pt-4">
             <h4 className="font-semibold">Contact 2</h4>
-
-            {/* Name */}
             <div className="flex items-center gap-3 text-muted-foreground">
               <User className="h-5 w-5" />
               <span>{fullName(contacts.contact2_firstName, contacts.contact2_lastName)}</span>
             </div>
-
-            {/* Email */}
             <div className="flex items-center gap-3 text-muted-foreground">
               <Mail className="h-5 w-5" />
-              <span>{contacts.contact2_email}</span>
+              <span>{contacts.contact2_email || "—"}</span>
             </div>
-
-            {/* Phone */}
             <div className="flex items-center gap-3 text-muted-foreground">
               <Phone className="h-5 w-5" />
-              <span>{contacts.contact2_phone}</span>
+              <span>{contacts.contact2_phone || "—"}</span>
             </div>
-
-            {/* Resend button (only if email present) */}
             {!!contacts.contact2_email && (
               <div className="pt-2">
                 <Button
                   size="sm"
                   variant="outline"
                   onClick={() => handleResend(contacts.contact2_email)}
-                  disabled={resending === contacts.contact2_email.toLowerCase()}
+                  disabled={resending === normEmail(contacts.contact2_email)}
                 >
-                  {resending === contacts.contact2_email.toLowerCase() ? "Sending…" : "Resend invite"}
+                  {resending === normEmail(contacts.contact2_email) ? "Sending…" : "Resend invite"}
                 </Button>
               </div>
             )}
@@ -564,3 +529,5 @@ export function EmergencyContacts() {
     </Card>
   );
 }
+
+export default EmergencyContacts;

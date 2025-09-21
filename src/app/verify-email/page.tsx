@@ -9,15 +9,22 @@ import { doc, getDoc } from "firebase/firestore";
 import { Button } from "@/components/ui/button";
 import { normalizeRole, Role } from "@/lib/roles";
 
-const ACCEPT_API = "/api/emergency_contact/accept";
-const EMERGENCY_DASH = "/emergency-dashboard";
-const MAIN_DASH = "/dashboard";
+/* ---------------- Constants used for redirects ---------------- */
+const ACCEPT_API = "/api/emergency_contact/accept"; // server route to accept inviter’s token
+const EMERGENCY_DASH = "/emergency-dashboard";      // destination for emergency contacts
+const MAIN_DASH = "/dashboard";                     // destination for main users
 
-// Resolve role from URL if present; else from Firestore; else default to main_user
+/* ---------------- Helpers ---------------- */
+
+/**
+ * Get the user’s role, with precedence:
+ * 1) ?role= in the URL (if present and valid),
+ * 2) users/{uid}.role in Firestore,
+ * 3) fallback "main_user".
+ */
 async function resolveRole(uid: string, roleParam: string | null): Promise<Role> {
   const fromUrl = normalizeRole(roleParam);
   if (fromUrl) return fromUrl;
-
   try {
     const snap = await getDoc(doc(db, "users", uid));
     const role = snap.exists() ? (snap.data() as any).role : undefined;
@@ -27,7 +34,10 @@ async function resolveRole(uid: string, roleParam: string | null): Promise<Role>
   }
 }
 
-// Create/refresh the server session cookie from the current Firebase ID token
+/**
+ * Create or refresh the server session cookie from the client’s ID token.
+ * Returns true if the cookie was set successfully.
+ */
 async function ensureSessionCookie(): Promise<boolean> {
   const u = auth.currentUser;
   if (!u) return false;
@@ -45,50 +55,64 @@ async function ensureSessionCookie(): Promise<boolean> {
   }
 }
 
+/* ---------------- Page Component ---------------- */
 export default function VerifyEmailPage() {
-  const params = useSearchParams();
-  const router = useRouter();
+  const params = useSearchParams();     // read URL query params
+  const router = useRouter();           // programmatic navigation
 
-  // carried via links
-  const roleParam = normalizeRole(params.get("role")) ?? "main_user"; // 'main_user' | 'emergency_contact'
+  // Role hint from the URL; default to "main_user" if not set/invalid.
+  const roleParam = normalizeRole(params.get("role")) ?? "main_user";
+  // Optional “take me here after done” path.
   const nextParam = params.get("next") || "";
+  // Optional email to display on screen (if the link carried it).
   const emailParam = params.get("email") || "";
-  const token = params.get("token") || ""; // invite token (optional)
+  // Optional invite token for emergency-contact flows.
+  const token = params.get("token") || "";
 
-  // if the verification email opened this page directly
-  const mode = params.get("mode");
-  const oobCode = params.get("oobCode");
+  // If the Firebase “action link” opened this page directly, these are set:
+  const mode = params.get("mode");     // should be "verifyEmail" for our flow
+  const oobCode = params.get("oobCode"); // one-time verification code
 
-  // returned from Firebase hosted page "Continue"
+  // If the user clicked “Continue” from Firebase’s hosted page, we get this flag.
   const fromHosted = params.get("fromHosted") === "1";
 
+  // Prefer email from the URL, otherwise from current user (if any).
   const email = emailParam || auth.currentUser?.email || "";
 
+  // UI state for spinners / messages.
   const [busy, setBusy] = useState(false);
   const [status, setStatus] = useState("");
   const [isVerified, setIsVerified] = useState(false);
 
-  // continue URL for (re)send actions — include role/next/token
+  /**
+   * Build the “continue URL” that Firebase uses in the verification email.
+   * We include role/next/token so the user lands back here with the right context.
+   */
   const continueUrl = useMemo(() => {
     const base = typeof window === "undefined" ? "" : window.location.origin;
     const qs = new URLSearchParams({
       role: roleParam,
-      fromHosted: "1",
+      fromHosted: "1",           // mark that this came back from Firebase hosted page
       ...(nextParam ? { next: nextParam } : {}),
       ...(token ? { token } : {}),
     }).toString();
     return `${base}/verify-email?${qs}`;
   }, [roleParam, nextParam, token]);
 
-  // destination after success
+  /** Choose where to go after successful verification based on role (or nextParam if present). */
   const desiredDestination = (role: Role) =>
     nextParam || (role === "emergency_contact" ? EMERGENCY_DASH : MAIN_DASH);
 
-  // Try to accept the invite token (only for emergency_contact flows)
+  /**
+   * Try to accept an emergency-contact invite token.
+   * - Ensures the session cookie exists (so the API is authorized)
+   * - Retries once on 401
+   * - Redirects to login/accept pages as needed
+   * Returns true if everything’s OK and we can continue; false if we navigated away.
+   */
   const tryAcceptInvite = async (): Promise<boolean> => {
-    if (!token) return true; // nothing to do
+    if (!token) return true; // Nothing to accept.
 
-    // helper to call API
     const attempt = () =>
       fetch(ACCEPT_API, {
         method: "POST",
@@ -98,12 +122,10 @@ export default function VerifyEmailPage() {
       });
 
     try {
-      // make sure server session cookie exists before first attempt
-      await ensureSessionCookie();
+      await ensureSessionCookie();      // make sure cookie is present
+      let res = await attempt();        // first attempt
 
-      let res = await attempt();
-
-      // Retry once on 401 after forcing a fresh session cookie
+      // If cookie wasn’t ready → try once more after forcing a refresh.
       if (res.status === 401 && auth.currentUser) {
         const ok = await ensureSessionCookie();
         if (ok) res = await attempt();
@@ -111,8 +133,8 @@ export default function VerifyEmailPage() {
 
       if (res.ok) return true;
 
+      // Unauthenticated → go to login (preserve token + desired next).
       if (res.status === 401) {
-        // unauthenticated → send to login with role/token/next
         router.replace(
           `/login?role=emergency_contact&next=${encodeURIComponent(
             desiredDestination("emergency_contact")
@@ -121,13 +143,13 @@ export default function VerifyEmailPage() {
         return false;
       }
 
+      // Authenticated but wrong account/email → show accept page (has sign-out flow).
       if (res.status === 403) {
-        // wrong role/email → go to accept page which shows sign-out flow
         router.replace(`/emergency_contact/accept?token=${encodeURIComponent(token)}`);
         return false;
       }
 
-      // Other errors (e.g., expired 410 / used 409)
+      // Other server errors (expired/used/etc.) → show a message.
       try {
         const { error } = await res.json();
         setStatus(error || "Invite acceptance failed.");
@@ -141,42 +163,50 @@ export default function VerifyEmailPage() {
     }
   };
 
-  // 1) apply code or honor hosted return
-  // 2) accept invite (if token & emergency_contact)
-  // 3) redirect
+  /**
+   * Lifecycle:
+   * 1) If we have a Firebase action code (?mode=verifyEmail&oobCode=...), apply it.
+   * 2) Or if we came back from the hosted page (?fromHosted=1), treat as verified.
+   * 3) Ensure the cookie, resolve role, maybe accept invite, then redirect.
+   * 4) If not signed in, send to login carrying role/next/token.
+   */
   useEffect(() => {
     const run = async () => {
       setBusy(true);
       try {
+        // Case A: we have a code → apply verification immediately.
         if (mode === "verifyEmail" && oobCode) {
           setStatus("Verifying your email…");
           await applyActionCode(auth, oobCode);
           setIsVerified(true);
           setStatus("Your email has been verified. Redirecting…");
-        } else if (fromHosted) {
+        }
+        // Case B: returned from Firebase hosted page that already verified.
+        else if (fromHosted) {
           setIsVerified(true);
           setStatus("Your email has been verified. Redirecting…");
-        } else {
+        }
+        // Neither? Show the “send / resend” UI.
+        else {
           setIsVerified(false);
           setStatus("");
           return;
         }
 
+        // If the user is signed in, we can get role + accept invite (if any) + redirect.
         if (auth.currentUser) {
-          // Make sure server session cookie exists for API calls
-          await ensureSessionCookie();
-
-          await auth.currentUser.reload();
+          await ensureSessionCookie();                     // authorize API calls
+          await auth.currentUser.reload();                 // make sure emailVerified is current
           const role = await resolveRole(auth.currentUser.uid, params.get("role"));
           if (role === "emergency_contact") {
             const ok = await tryAcceptInvite();
-            if (!ok) return; // redirected to login or accept page or showed an error
+            if (!ok) return;                               // we navigated away inside tryAcceptInvite
           }
           router.replace(desiredDestination(role));
           return;
         }
 
-        // not signed in — send to login with next (and token if present)
+        // Not signed in → go to login and keep all context.
         const destIfSigned = desiredDestination(roleParam);
         router.replace(
           `/login?role=${encodeURIComponent(roleParam)}&next=${encodeURIComponent(destIfSigned)}${
@@ -191,10 +221,13 @@ export default function VerifyEmailPage() {
         setBusy(false);
       }
     };
+
     void run();
+    // We intentionally only react to these inputs; eslint disabled to avoid ref churn.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [mode, oobCode, fromHosted]);
 
+  /** Manual “Refresh” button: re-check emailVerified, then finish flow. */
   const refresh = async () => {
     try {
       setBusy(true);
@@ -221,6 +254,7 @@ export default function VerifyEmailPage() {
     }
   };
 
+  /** “Resend” button: sends a new verification email with continueUrl back to this page. */
   const resend = async () => {
     try {
       setBusy(true);
@@ -230,8 +264,8 @@ export default function VerifyEmailPage() {
         return;
       }
       await sendEmailVerification(u, {
-        url: continueUrl,
-        handleCodeInApp: true,
+        url: continueUrl,          // where the “Verify” button brings them back
+        handleCodeInApp: true,     // we handle the code here
       });
       setStatus(`Verification email sent to ${u.email}. Check inbox/spam.`);
     } catch (err) {
@@ -242,6 +276,7 @@ export default function VerifyEmailPage() {
     }
   };
 
+  /* ---------------- UI ---------------- */
   return (
     <main className="min-h-[60vh] flex items-center justify-center p-6">
       <div className="max-w-md w-full space-y-4">

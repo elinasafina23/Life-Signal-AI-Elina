@@ -97,8 +97,7 @@ function initialsAndColor(name = "") {
       .toUpperCase() || "UA";
 
   const colorIndex =
-    name.split("").reduce((sum, char) => sum + char.charCodeAt(0), 0) %
-    userColors.length;
+    name.split("").reduce((sum, char) => sum + char.charCodeAt(0), 0) % userColors.length;
 
   return { initials, colorClass: userColors[colorIndex] };
 }
@@ -160,7 +159,9 @@ export default function EmergencyDashboardPage() {
 
   const [mainUsers, setMainUsers] = useState<MainUserCard[]>([]);
   const [loading, setLoading] = useState(true);
-  const [uid, setUid] = useState<string | null>(null);
+
+  // ✅ renamed to the canonical contact id
+  const [emergencyContactUid, setEmergencyContactUid] = useState<string | null>(null);
 
   // centered popup when location is missing
   const [noLocationUser, setNoLocationUser] = useState<MainUserCard | null>(null);
@@ -176,7 +177,7 @@ export default function EmergencyDashboardPage() {
       Object.values(unsubsRef.current).forEach((fn) => fn());
       unsubsRef.current = {};
       setMainUsers([]);
-      setUid(null);
+      setEmergencyContactUid(null);
 
       if (!user) {
         setLoading(false);
@@ -201,135 +202,125 @@ export default function EmergencyDashboardPage() {
         return;
       }
 
-      setUid(user.uid);
+      setEmergencyContactUid(user.uid);
       setLoading(false);
 
-      // ---- Listen to links in LEGACY style: uid === current user's uid ----
-      const linksByLegacyUid = query(
+      // ✅ New canonical link query:
+      // users/{mainUserUid}/emergency_contact/{linkDoc} where emergencyContactUid == current user.uid
+      const linksByEmergencyContactUid = query(
         collectionGroup(db, "emergency_contact"),
-        where("uid", "==", user.uid)
+        where("emergencyContactUid", "==", user.uid)
       );
 
       function wireLinksListener(q: FsQuery<DocumentData>, key: string) {
-        unsubsRef.current[key] = onSnapshot(
-          q,
-          (linksSnap: QuerySnapshot<DocumentData>) => {
-            // gather all main user IDs referenced by the link snapshot(s)
-            const nextMainUserIds = new Set<string>(
-              Object.keys(unsubsRef.current).filter((k) => k !== LINKS_KEY)
-            );
+        unsubsRef.current[key] = onSnapshot(q, (linksSnap: QuerySnapshot<DocumentData>) => {
+          // gather all main user IDs referenced by the link snapshot(s)
+          const nextMainUserIds = new Set<string>(
+            Object.keys(unsubsRef.current).filter((k) => k !== LINKS_KEY)
+          );
 
-            linksSnap.forEach((linkDoc) => {
-              // users/{MAIN_UID}/emergency_contact/{...}
-              const mainUserUid = linkDoc.ref.parent.parent?.id;
-              if (mainUserUid) nextMainUserIds.add(mainUserUid);
-            });
+          linksSnap.forEach((linkDoc) => {
+            // users/{MAIN_UID}/emergency_contact/{...}
+            const mainUserUid = linkDoc.ref.parent.parent?.id;
+            if (mainUserUid) nextMainUserIds.add(mainUserUid);
+          });
 
-            // remove listeners for unlinked users
-            Object.keys(unsubsRef.current).forEach((k) => {
-              if (k === LINKS_KEY) return;
-              if (!nextMainUserIds.has(k)) {
-                unsubsRef.current[k](); // unsubscribe
-                delete unsubsRef.current[k];
-              }
-            });
+          // remove listeners for unlinked users
+          Object.keys(unsubsRef.current).forEach((k) => {
+            if (k === LINKS_KEY) return;
+            if (!nextMainUserIds.has(k)) {
+              unsubsRef.current[k](); // unsubscribe
+              delete unsubsRef.current[k];
+            }
+          });
 
-            // ensure we are listening to each linked main user doc
-            nextMainUserIds.forEach((mainUserId) => {
-              if (unsubsRef.current[mainUserId]) return;
+          // ensure we are listening to each linked main user doc
+          nextMainUserIds.forEach((mainUserId) => {
+            if (unsubsRef.current[mainUserId]) return;
 
-              const userDocRef = doc(db, "users", mainUserId);
-              unsubsRef.current[mainUserId] = onSnapshot(
-                userDocRef,
-                (userDocSnap) => {
-                  const userData = (userDocSnap.data() as MainUserDoc) || undefined;
+            const userDocRef = doc(db, "users", mainUserId);
+            unsubsRef.current[mainUserId] = onSnapshot(
+              userDocRef,
+              (userDocSnap) => {
+                const userData = (userDocSnap.data() as MainUserDoc) || undefined;
 
-                  const name =
-                    `${userData?.firstName || ""} ${userData?.lastName || ""}`.trim() ||
-                    "Main User";
-                  const displayName = `${userData?.firstName || ""} ${
-                    userData?.lastName?.[0] || ""
-                  }`.trim();
-                  const { initials, colorClass } = initialsAndColor(name);
+                const name =
+                  `${userData?.firstName || ""} ${userData?.lastName || ""}`.trim() ||
+                  "Main User";
+                const displayName = `${userData?.firstName || ""} ${
+                  userData?.lastName?.[0] || ""
+                }`.trim();
+                const { initials, colorClass } = initialsAndColor(name);
 
-                  const last =
-                    userData?.lastCheckinAt instanceof Timestamp
-                      ? userData.lastCheckinAt.toDate()
-                      : undefined;
+                const last =
+                  userData?.lastCheckinAt instanceof Timestamp
+                    ? userData.lastCheckinAt.toDate()
+                    : undefined;
 
-                  const rawInt = userData?.checkinInterval;
-                  const intervalMin =
-                    typeof rawInt === "number"
-                      ? rawInt
-                      : parseInt(String(rawInt ?? ""), 10) || 12 * 60;
+                const rawInt = userData?.checkinInterval;
+                const intervalMin =
+                  typeof rawInt === "number" ? rawInt : parseInt(String(rawInt ?? ""), 10) || 12 * 60;
 
-                  // ✅ prefer dueAtMin from backend if present
-                  const dueAtMin = Number((userData as any)?.dueAtMin);
-                  const nowMin = Math.floor(Date.now() / 60000);
+                // ✅ prefer dueAtMin from backend if present
+                const dueAtMin = Number((userData as any)?.dueAtMin);
+                const nowMin = Math.floor(Date.now() / 60000);
 
-                  let status: Status = "OK";
-                  if (userData?.sosTriggeredAt instanceof Timestamp) {
-                    status = "SOS";
-                  } else if (Number.isFinite(dueAtMin)) {
-                    status = nowMin >= dueAtMin ? "Inactive" : "OK";
-                  } else if (last) {
-                    const nextDue = last.getTime() + intervalMin * 60 * 1000;
-                    status = Date.now() > nextDue ? "Inactive" : "OK";
-                  } else {
-                    status = "Inactive";
-                  }
+                let status: Status = "OK";
+                if (userData?.sosTriggeredAt instanceof Timestamp) {
+                  status = "SOS";
+                } else if (Number.isFinite(dueAtMin)) {
+                  status = nowMin >= dueAtMin ? "Inactive" : "OK";
+                } else if (last) {
+                  const nextDue = last.getTime() + intervalMin * 60 * 1000;
+                  status = Date.now() > nextDue ? "Inactive" : "OK";
+                } else {
+                  status = "Inactive";
+                }
 
-                  const updatedCard: MainUserCard = {
+                const updatedCard: MainUserCard = {
+                  mainUserUid: mainUserId,
+                  name: displayName || name,
+                  avatar: userData?.avatar,
+                  initials,
+                  colorClass,
+                  status,
+                  lastCheckIn: formatWhen(last),
+                  location: userData?.location || "",
+                };
+
+                setMainUsers((prev) => {
+                  const map = new Map(prev.map((u) => [u.mainUserUid, u]));
+                  map.set(mainUserId, updatedCard);
+                  return Array.from(map.values()).sort((a, b) => a.name.localeCompare(b.name));
+                });
+              },
+              (error) => {
+                console.error(`[Emergency Dashboard] User doc listen failed for ${mainUserId}:`, error);
+                const { initials, colorClass } = initialsAndColor("User Load Error");
+                setMainUsers((prev) => {
+                  const map = new Map(prev.map((u) => [u.mainUserUid, u]));
+                  map.set(mainUserId, {
                     mainUserUid: mainUserId,
-                    name: displayName || name,
-                    avatar: userData?.avatar,
+                    name: "User Load Error",
                     initials,
                     colorClass,
-                    status,
-                    lastCheckIn: formatWhen(last),
-                    location: userData?.location || "",
-                  };
-
-                  setMainUsers((prev) => {
-                    const map = new Map(prev.map((u) => [u.mainUserUid, u]));
-                    map.set(mainUserId, updatedCard);
-                    return Array.from(map.values()).sort((a, b) => a.name.localeCompare(b.name));
+                    status: "Inactive",
                   });
-                },
-                (error) => {
-                  console.error(
-                    `[Emergency Dashboard] User doc listen failed for ${mainUserId}:`,
-                    error
-                  );
-                  const { initials, colorClass } = initialsAndColor("User Load Error");
-                  setMainUsers((prev) => {
-                    const map = new Map(prev.map((u) => [u.mainUserUid, u]));
-                    map.set(mainUserId, {
-                      mainUserUid: mainUserId,
-                      name: "User Load Error",
-                      initials,
-                      colorClass,
-                      status: "Inactive",
-                    });
-                    return Array.from(map.values()).sort((a, b) => a.name.localeCompare(b.name));
-                  });
-                }
-              );
-            });
+                  return Array.from(map.values()).sort((a, b) => a.name.localeCompare(b.name));
+                });
+              }
+            );
+          });
 
-            // drop any cards that are no longer linked
-            setMainUsers((prev) => {
-              const valid = new Set(
-                Object.keys(unsubsRef.current).filter((k) => k !== LINKS_KEY)
-              );
-              return prev.filter((u) => valid.has(u.mainUserUid));
-            });
-          }
-        );
+          // drop any cards that are no longer linked
+          setMainUsers((prev) => {
+            const valid = new Set(Object.keys(unsubsRef.current).filter((k) => k !== LINKS_KEY));
+            return prev.filter((u) => valid.has(u.mainUserUid));
+          });
+        });
       }
 
-     
-      wireLinksListener(linksByLegacyUid as FsQuery<DocumentData>, LINKS_KEY);
+      wireLinksListener(linksByEmergencyContactUid as FsQuery<DocumentData>, LINKS_KEY);
     });
 
     return () => {
@@ -342,9 +333,9 @@ export default function EmergencyDashboardPage() {
 
   // ensure this contact device is registered to receive pushes
   useEffect(() => {
-    if (!uid) return;
-    registerDevice(uid, "emergency"); // keep your signature
-  }, [uid]);
+    if (!emergencyContactUid) return;
+    registerDevice(emergencyContactUid, "emergency"); // keep your signature
+  }, [emergencyContactUid]);
 
   const handleAcknowledge = (userName: string) => {
     toast({
@@ -372,7 +363,7 @@ export default function EmergencyDashboardPage() {
           <h1 className="text-3xl md:text-4xl font-headline font-bold">
             Emergency Contact Dashboard
           </h1>
-          {uid && (
+          {emergencyContactUid && (
             <Button variant="outline" onClick={() => router.push("/emergency-settings")}>
               <SettingsIcon className="h-5 w-5 mr-2" />
               Settings

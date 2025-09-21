@@ -39,8 +39,9 @@ import {
 } from "firebase/auth";
 import { doc, serverTimestamp, setDoc } from "firebase/firestore";
 
-import { normalizeRole, Role } from "@/lib/roles";
+import { normalizeRole, type Role } from "@/lib/roles";
 
+/* ---------------- Password policy (unchanged from your version) ---------------- */
 const passwordValidation = z
   .string()
   .min(8, { message: "Password must be at least 8 characters long." })
@@ -49,7 +50,6 @@ const passwordValidation = z
   .regex(/[0-9]/, { message: "Password must contain at least one number." })
   .regex(/[^a-zA-Z0-9]/, { message: "Password must contain at least one special character." });
 
-// Zod schema updated to include separate firstName and lastName fields.
 const signupSchema = z
   .object({
     firstName: z.string().min(2, { message: "First name must be at least 2 characters." }),
@@ -63,6 +63,33 @@ const signupSchema = z
     path: ["confirmPassword"],
   });
 
+/* ---------------- Small helpers I added ---------------- */
+// Fire-and-forget session cookie so server APIs work without a reload.
+async function setSessionCookieFast() {
+  const u = auth.currentUser;
+  if (!u) return;
+  const idToken = await u.getIdToken(true);
+  fetch("/api/auth/session", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    credentials: "include",
+    body: JSON.stringify({ idToken }),
+    keepalive: true,
+  }).catch(() => {});
+}
+
+// If sign-up came from an invite link, accept it in the background (doesn’t block).
+async function maybeAutoAcceptInvite(token: string | null) {
+  if (!token) return;
+  fetch("/api/emergency_contact/accept", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    credentials: "include",
+    body: JSON.stringify({ token }),
+    keepalive: true,
+  }).catch(() => {});
+}
+
 export default function SignupPage() {
   const router = useRouter();
   const params = useSearchParams();
@@ -71,6 +98,7 @@ export default function SignupPage() {
   const role: Role = normalizeRole(params.get("role")) ?? "main_user";
   const token = params.get("token") || null;
 
+  // Keep your exact next-sanitizing semantics (including "/" -> "")
   const rawNext = params.get("next");
   const next = useMemo(() => {
     const n = rawNext && rawNext.startsWith("/") ? rawNext : "";
@@ -82,6 +110,7 @@ export default function SignupPage() {
       ? process.env.NEXT_PUBLIC_APP_ORIGIN || ""
       : window.location.origin;
 
+  // Keep your continueUrl style for Firebase verify
   const continueUrl = useMemo(() => {
     const q = new URLSearchParams({
       role,
@@ -95,12 +124,18 @@ export default function SignupPage() {
   const [passwordStrength, setPasswordStrength] = useState(0);
   const [isSubmitting, setIsSubmitting] = useState(false);
 
-  // Default values updated to include firstName and lastName.
   const form = useForm<z.infer<typeof signupSchema>>({
     resolver: zodResolver(signupSchema),
-    defaultValues: { firstName: "", lastName: "", email: "", password: "", confirmPassword: "" },
+    defaultValues: {
+      firstName: "",
+      lastName: "",
+      email: "",
+      password: "",
+      confirmPassword: "",
+    },
   });
 
+  // Keep your strength meter behavior
   const calculatePasswordStrength = (password: string) => {
     let score = 0;
     if (password.length >= 8) score++;
@@ -111,23 +146,25 @@ export default function SignupPage() {
     return (score / 5) * 100;
   };
 
-  const password = form.watch("password");
-  useEffect(() => setPasswordStrength(calculatePasswordStrength(password)), [password]);
+  const watchedPassword = form.watch("password");
+  useEffect(() => setPasswordStrength(calculatePasswordStrength(watchedPassword)), [watchedPassword]);
 
   const onSubmit = async (values: z.infer<typeof signupSchema>) => {
     try {
       setIsSubmitting(true);
 
+      // 1) Create Firebase user
       const cred = await createUserWithEmailAndPassword(
         auth,
         values.email.trim().toLowerCase(),
         values.password
       );
 
-      // updateProfile now uses the combined first and last names.
-      await updateProfile(cred.user, { displayName: `${values.firstName} ${values.lastName}` });
+      // 2) Update displayName to "First Last"
+      const displayName = `${values.firstName} ${values.lastName}`;
+      await updateProfile(cred.user, { displayName });
 
-      // setDoc now stores firstName and lastName separately.
+      // 3) Write Firestore profile (keeps your shape and also stores email)
       await setDoc(
         doc(db, "users", cred.user.uid),
         {
@@ -135,11 +172,14 @@ export default function SignupPage() {
           firstName: values.firstName,
           lastName: values.lastName,
           role,
+          email: cred.user.email ?? values.email.trim().toLowerCase(),
           createdAt: serverTimestamp(),
+          updatedAt: serverTimestamp(),
         },
         { merge: true }
       );
 
+      // 4) Send verification email back to /verify-email with your query context
       try {
         await sendEmailVerification(cred.user, {
           url: continueUrl,
@@ -149,6 +189,11 @@ export default function SignupPage() {
         console.warn("sendEmailVerification failed:", e);
       }
 
+      // 5) Non-blocking: session cookie + optional invite accept
+      void setSessionCookieFast();
+      void maybeAutoAcceptInvite(token);
+
+      // 6) Your redirect pattern
       router.push(
         `/verify-email?email=${encodeURIComponent(values.email)}&role=${encodeURIComponent(role)}${
           next ? `&next=${encodeURIComponent(next)}` : ""
@@ -184,7 +229,7 @@ export default function SignupPage() {
           <Form {...form}>
             <form onSubmit={form.handleSubmit(onSubmit)}>
               <CardContent className="space-y-4">
-                {/* First Name field */}
+                {/* First Name */}
                 <FormField
                   control={form.control}
                   name="firstName"
@@ -199,7 +244,7 @@ export default function SignupPage() {
                   )}
                 />
 
-                {/* Last Name field */}
+                {/* Last Name */}
                 <FormField
                   control={form.control}
                   name="lastName"
@@ -214,6 +259,7 @@ export default function SignupPage() {
                   )}
                 />
 
+                {/* Email */}
                 <FormField
                   control={form.control}
                   name="email"
@@ -228,6 +274,7 @@ export default function SignupPage() {
                   )}
                 />
 
+                {/* Password */}
                 <FormField
                   control={form.control}
                   name="password"
@@ -237,12 +284,13 @@ export default function SignupPage() {
                       <FormControl>
                         <Input type="password" placeholder="••••••••" {...field} disabled={isSubmitting} />
                       </FormControl>
-                      {password && <Progress value={passwordStrength} className="mt-2 h-2" />}
+                      {field.value && <Progress value={passwordStrength} className="mt-2 h-2" />}
                       <FormMessage />
                     </FormItem>
                   )}
                 />
 
+                {/* Confirm Password */}
                 <FormField
                   control={form.control}
                   name="confirmPassword"

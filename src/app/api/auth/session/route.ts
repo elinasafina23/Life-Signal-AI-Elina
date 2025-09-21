@@ -1,16 +1,17 @@
 // src/app/api/auth/session/route.ts
+
 import { NextRequest, NextResponse } from "next/server";
 import { adminAuth } from "@/lib/firebaseAdmin";
 
 /**
  * How long the Firebase session cookie should last (ms).
- * NOTE: Firebase allows up to 14 days. We're using 5 days here.
+ * Firebase allows up to 14 days; we choose 5 days here.
  */
 const EXPIRES_IN = 60 * 60 * 24 * 5 * 1000; // 5 days
 
 /**
- * Utility: build a JSON response with no-store cache headers,
- * so browsers/CDNs don't cache auth responses.
+ * Small helper to return JSON responses with "no-store" caching,
+ * so auth responses are never cached by the browser/CDN.
  */
 function json(data: any, init?: ResponseInit) {
   const res = NextResponse.json(data, init);
@@ -20,32 +21,52 @@ function json(data: any, init?: ResponseInit) {
 
 /**
  * POST /api/auth/session
- * Exchange a Firebase ID token for a session cookie and set it on the response.
- * Call this from your client after sign-in (with the ID token).
+ *
+ * Client flow:
+ * 1) The client signs in with Firebase Client SDK and gets an ID token.
+ * 2) The client POSTs that ID token here.
+ *
+ * Server flow:
+ * 1) Verify the ID token (checks signature + revocation).
+ * 2) Exchange it for a Firebase "session cookie".
+ * 3) Set the session cookie on the response (httpOnly).
+ *
+ * Result:
+ * - Your Next.js app can trust the cookie on subsequent requests
+ *   without sending the ID token again.
  */
 export async function POST(req: NextRequest) {
   try {
+    // Parse JSON body and extract idToken from the client
     const { idToken } = await req.json();
     if (!idToken) return json({ error: "idToken required" }, { status: 400 });
 
-    // Verify the client ID token first (also checks revocation when true)
+    // Verify the ID token (2nd arg=true also checks revocation)
     await adminAuth.verifyIdToken(idToken, true);
 
-    // Mint a session cookie from the ID token
+    // Create a session cookie valid for EXPIRES_IN ms
     const sessionCookie = await adminAuth.createSessionCookie(idToken, {
       expiresIn: EXPIRES_IN,
     });
 
+    // Build OK response
     const res = json({ ok: true });
 
-    // IMPORTANT: cookie name must be "__session" when deploying behind Firebase Hosting.
+    /**
+     * IMPORTANT:
+     * - When deployed behind Firebase Hosting rewrites, the cookie name
+     *   must be "__session" (Firebase enforces this).
+     * - httpOnly prevents JS from reading it (safer).
+     * - secure only on production (allow http in dev).
+     * - sameSite=lax is a good default for app navigation.
+     */
     res.cookies.set({
       name: "__session",
       value: sessionCookie,
       httpOnly: true,
-      secure: process.env.NODE_ENV === "production", // in dev, allow http
+      secure: process.env.NODE_ENV === "production",
       sameSite: "lax",
-      path: "/", // send cookie for all routes
+      path: "/", // send cookie on all routes
       maxAge: EXPIRES_IN / 1000, // seconds
     });
 
@@ -58,45 +79,61 @@ export async function POST(req: NextRequest) {
 
 /**
  * GET /api/auth/session
- * Read & verify the Firebase session cookie and return the user payload
- * (including any custom claims like role/emergencyContactId).
+ *
+ * Server flow:
+ * 1) Read the "__session" cookie from the request.
+ * 2) Verify it with Admin SDK.
+ * 3) Return a "user" object your client can consume.
+ *
+ * Custom Claims:
+ * - If you set custom claims on users (recommended), they'll be present
+ *   on the decoded token. For your app, you may set:
+ *     { role: "emergency_contact" | "main_user", emergencyContactUid?: string }
+ * - Note: the main user's uid is always available as decoded.uid.
  */
 export async function GET(req: NextRequest) {
   try {
+    // Pull the session cookie from request
     const sessionCookie = req.cookies.get("__session")?.value;
     if (!sessionCookie) {
-      return json({}, { status: 401 }); // not logged in
+      // Not logged in / missing cookie
+      return json({}, { status: 401 });
     }
 
     // Verify the cookie (2nd arg=true also checks revocation)
     const decoded = await adminAuth.verifySessionCookie(sessionCookie, true);
 
-    // If you set custom claims (recommended), they'll be present here:
-    // await adminAuth.setCustomUserClaims(uid, { role: "EMERGENCY_CONTACT", emergencyContactId: "..." })
+    // All custom claims you set will be on 'decoded'
     const claims = decoded as Record<string, any>;
 
+    // Build a minimal user payload for the client.
+    // - uid: this user's Auth UID (main user or emergency contact).
+    // - role: your app role if you set it in custom claims.
+    // - emergencyContactUid: present only for contacts (if you use it).
     const user = {
-      uid: decoded.uid,
+      uid: decoded.uid, // this is the authenticated user's UID
       email: decoded.email ?? null,
-      // Custom claims (add more if you set them)
-      role: claims.role ?? null,
-      emergencyContactId: claims.emergencyContactId ?? null,
+      role: claims.role ?? null, // e.g., "main_user" | "emergency_contact"
+      emergencyContactUid: claims.emergencyContactUid ?? null, // your new naming
     };
 
     return json({ user });
   } catch (err) {
     console.error("GET /api/auth/session failed:", err);
-    // Cookie missing/expired/revoked, or token invalid
+    // Cookie missing/expired/revoked, or invalid token
     return json({}, { status: 401 });
   }
 }
 
 /**
  * DELETE /api/auth/session
- * Log out by clearing the session cookie.
+ *
+ * Clears the session cookie to "log out" on the server side.
  */
 export async function DELETE() {
   const res = json({ ok: true });
+
+  // Overwrite with empty value + maxAge=0 to remove the cookie
   res.cookies.set({
     name: "__session",
     value: "",
@@ -106,5 +143,6 @@ export async function DELETE() {
     path: "/",
     maxAge: 0,
   });
+
   return res;
 }
