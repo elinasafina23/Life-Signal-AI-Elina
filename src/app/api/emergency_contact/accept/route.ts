@@ -124,7 +124,7 @@ export async function POST(req: NextRequest) {
     }
 
     // --- Identify the main user being linked to ---
-    const mainUserUid: string = inv.mainUserId; // invite schema used mainUserId previously
+    const mainUserUid: string = inv.mainUserId; // invite schema used mainUserUid previously
     if (!mainUserUid) {
       return NextResponse.json({ error: "Invite missing main user id" }, { status: 400 });
     }

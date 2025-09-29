@@ -141,9 +141,9 @@ export async function POST(req: NextRequest) {
 
     /**
      * Create a NEW invite doc.
-     * We write BOTH mainUserUid (canonical) and mainUserId (legacy) so that
+     * We write BOTH mainUserUid (canonical) and mainUserUid (legacy) so that
      * older readers that still expect "mainUserId" keep working.
-     * Once everything reads "mainUserUid", you can drop mainUserId.
+     * Once everything reads "mainUserUid", you can drop mainUserUid.
      */
     const inviteRef = db.collection("invites").doc();
     batch.set(inviteRef, {

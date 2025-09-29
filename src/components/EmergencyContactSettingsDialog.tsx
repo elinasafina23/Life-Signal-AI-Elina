@@ -1,7 +1,7 @@
 // src/components/EmergencyContactSettingsDialog.tsx
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   Dialog,
   DialogContent,
@@ -22,7 +22,16 @@ import {
 import { Switch } from "@/components/ui/switch";
 import { useToast } from "@/hooks/use-toast";
 import { db } from "@/firebase";
-import { doc, getDoc, setDoc, serverTimestamp } from "firebase/firestore";
+import {
+  doc,
+  getDoc,
+  setDoc,
+  serverTimestamp,
+  collectionGroup,
+  query,
+  where,
+  getDocs,
+} from "firebase/firestore";
 import { Pencil, Check, X } from "lucide-react";
 
 // -------------------- Props --------------------
@@ -31,6 +40,27 @@ interface Props {
   emergencyContactUid: string;
   open: boolean;
   onOpenChange: (open: boolean) => void;
+}
+
+/** Optional: configure where the policy update POST should go */
+const UPDATE_POLICY_URL = "/api/emergency_contact/update_policy";
+
+type PolicyMode = "push_then_call" | "call_immediately";
+
+/* -------------------- Helpers: email & phone validation -------------------- */
+const isEmail = (v?: string) =>
+  !!v && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v.trim());
+
+/** Telnyx-friendly E.164: +, country code 1–3 digits, then national digits (total 8–15). */
+const isE164 = (v?: string) =>
+  !!v && /^\+[1-9]\d{7,14}$/.test(v.trim());
+
+/** Keep only one leading + and digits; drop spaces, dashes, parens, etc. */
+function sanitizePhoneInput(raw: string) {
+  const trimmed = raw.trim();
+  let s = trimmed.replace(/[^\d+]/g, "");
+  s = s[0] === "+" ? ("+" + s.slice(1).replace(/\+/g, "")) : s.replace(/\+/g, "");
+  return s;
 }
 
 export function EmergencyContactSettingsDialog({
@@ -56,7 +86,7 @@ export function EmergencyContactSettingsDialog({
   const [quietEnd, setQuietEnd] = useState("07:00");
   const [highPriorityOverride, setHighPriorityOverride] = useState(true);
 
-  // Escalation
+  // Escalation (legacy EC prefs you already had – kept as-is)
   const [escalationEnabled, setEscalationEnabled] = useState(false);
   const [escalationMinutes, setEscalationMinutes] = useState<number | "">("");
   const [escalationContactUids, setEscalationContactUids] = useState<string[]>(
@@ -64,9 +94,7 @@ export function EmergencyContactSettingsDialog({
   );
 
   // Repeats
-  const [repeatEveryMinutes, setRepeatEveryMinutes] = useState<number | "">(
-    ""
-  );
+  const [repeatEveryMinutes, setRepeatEveryMinutes] = useState<number | "">("");
   const [maxRepeatsPerWindow, setMaxRepeatsPerWindow] = useState<number | "">(
     ""
   );
@@ -77,6 +105,15 @@ export function EmergencyContactSettingsDialog({
   const [timeZone, setTimeZone] = useState("");
 
   const [saving, setSaving] = useState(false);
+
+  // -------------------- NEW: main-user policy editor state --------------------
+  const [linkedMainUsers, setLinkedMainUsers] = useState<
+    Array<{ uid: string; name: string }>
+  >([]);
+  const [selectedMainUserUid, setSelectedMainUserUid] = useState("");
+  const [policyMode, setPolicyMode] = useState<PolicyMode>("push_then_call");
+  const [policyDelaySec, setPolicyDelaySec] = useState<number>(60);
+  const [policySaving, setPolicySaving] = useState(false);
 
   // -------------------- Load profile --------------------
   useEffect(() => {
@@ -123,6 +160,77 @@ export function EmergencyContactSettingsDialog({
     })();
   }, [open, emergencyContactUid, toast]);
 
+  // -------------------- NEW: load linked main users for this EC --------------------
+  useEffect(() => {
+    if (!open || !emergencyContactUid) return;
+
+    (async () => {
+      try {
+        const q = query(
+          collectionGroup(db, "emergency_contact"),
+          where("emergencyContactUid", "==", emergencyContactUid)
+        );
+        const cg = await getDocs(q);
+
+        const rows = await Promise.all(
+          cg.docs.map(async (d) => {
+            const data = d.data() as any;
+            const uid: string =
+              data.mainUserUid ||
+              d.ref.parent.parent?.id ||
+              ""; // fallback to parent id
+            let name: string = data.mainUserName || "";
+
+            if (!name && uid) {
+              const mu = await getDoc(doc(db, "users", uid));
+              const md = mu.data() as any;
+              if (md) {
+                name =
+                  md.name ||
+                  `${md.firstName || ""} ${md.lastName || ""}`.trim() ||
+                  uid;
+              } else {
+                name = uid;
+              }
+            }
+            return uid ? { uid, name } : null;
+          })
+        );
+
+        const unique = Array.from(
+          new Map(
+            rows.filter(Boolean).map((r) => [r!.uid, r!])
+          ).values()
+        );
+
+        setLinkedMainUsers(unique);
+        if (!selectedMainUserUid && unique.length > 0) {
+          setSelectedMainUserUid(unique[0].uid);
+        }
+      } catch (e) {
+        console.error("Failed to load linked main users", e);
+      }
+    })();
+  }, [open, emergencyContactUid]); // eslint-disable-line
+
+  // -------------------- NEW: load existing policy for selected main user --------------------
+  useEffect(() => {
+    if (!open || !selectedMainUserUid) return;
+    (async () => {
+      try {
+        const mu = await getDoc(doc(db, "users", selectedMainUserUid));
+        if (mu.exists()) {
+          const d = mu.data() as any;
+          const p = d.escalationPolicy || {};
+          setPolicyMode((p.mode as PolicyMode) || "push_then_call");
+          setPolicyDelaySec(Number(p.callDelaySec || 60));
+        }
+      } catch (e) {
+        console.error("Failed to load policy", e);
+      }
+    })();
+  }, [open, selectedMainUserUid]);
+
   // -------------------- Validation --------------------
   const validateInputs = () => {
     if (!firstName.trim() || !lastName.trim()) {
@@ -133,7 +241,7 @@ export function EmergencyContactSettingsDialog({
       });
       return false;
     }
-    if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+    if (email && !isEmail(email)) {
       toast({
         title: "Invalid email",
         description: "Please enter a valid email address.",
@@ -141,10 +249,11 @@ export function EmergencyContactSettingsDialog({
       });
       return false;
     }
-    if (phone && !/^\d+$/.test(phone)) {
+    // Require E.164 phone (Telnyx compatible)
+    if (!phone.trim() || !isE164(phone)) {
       toast({
         title: "Invalid phone",
-        description: "Phone number should contain digits only.",
+        description: "Phone must include country code, e.g. +15551234567",
         variant: "destructive",
       });
       return false;
@@ -152,7 +261,7 @@ export function EmergencyContactSettingsDialog({
     return true;
   };
 
-  // -------------------- Save handler --------------------
+  // -------------------- Save EC profile --------------------
   const handleSave = async () => {
     if (!emergencyContactUid) return;
     if (!validateInputs()) return;
@@ -169,7 +278,7 @@ export function EmergencyContactSettingsDialog({
         name: fullName,
         displayName: fullName,
         email: email.trim(),
-        phone: phone.trim(),
+        phone: phone.trim(), // already sanitized & E.164-validated
         defaultChannel,
         highPriorityOverride,
         escalationEnabled,
@@ -191,11 +300,11 @@ export function EmergencyContactSettingsDialog({
         data.quietEnd = null;
       }
 
-      // 1) Update my own profile (allowed by rules)
+      // 1) Update my own profile
       const contactRef = doc(db, "users", emergencyContactUid);
       await setDoc(contactRef, data, { merge: true });
 
-      // 2) Ask server to fan-out my details to linked main users (server has admin perms)
+      // 2) Fan-out to linked main users (server-side)
       try {
         const res = await fetch("/api/emergency_contact/sync_profile", {
           method: "POST",
@@ -204,8 +313,8 @@ export function EmergencyContactSettingsDialog({
           body: JSON.stringify({
             emergencyContactUid,
             name: fullName,
-            email,
-            phone,
+            email: email.trim(),
+            phone: phone.trim(), // E.164
           }),
         });
         if (!res.ok) {
@@ -213,7 +322,7 @@ export function EmergencyContactSettingsDialog({
           throw new Error(error || "Sync failed");
         }
       } catch (e) {
-        // Non-fatal: my own profile is already saved; dashboard links will catch up later.
+        // Non-fatal
         console.error("Server sync failed:", e);
       }
 
@@ -231,6 +340,64 @@ export function EmergencyContactSettingsDialog({
     }
   };
 
+  // -------------------- Policy save --------------------
+  const handleSavePolicy = async () => {
+    if (!selectedMainUserUid) {
+      toast({
+        title: "Select a user",
+        description: "Choose a main user to apply the policy to.",
+        variant: "destructive",
+      });
+      return;
+    }
+    setPolicySaving(true);
+    try {
+      if (UPDATE_POLICY_URL) {
+        const r = await fetch(UPDATE_POLICY_URL, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          credentials: "include",
+          body: JSON.stringify({
+            mainUserUid: selectedMainUserUid,
+            mode: policyMode,
+            callDelaySec: policyDelaySec,
+          }),
+        });
+        if (!r.ok) {
+          const { error } = await r.json().catch(() => ({}));
+          throw new Error(error || "Policy update failed");
+        }
+      } else {
+        await setDoc(
+          doc(db, "users", selectedMainUserUid),
+          {
+            escalationPolicy: {
+              version: 1,
+              mode: policyMode,
+              callDelaySec: policyDelaySec,
+              updatedAt: serverTimestamp(),
+            },
+          },
+          { merge: true }
+        );
+      }
+
+      toast({
+        title: "Policy saved",
+        description: "Escalation policy updated for the selected user.",
+      });
+    } catch (e: any) {
+      console.error(e);
+      toast({
+        title: "Save failed",
+        description: e?.message || "Could not save policy.",
+        variant: "destructive",
+      });
+    } finally {
+      setPolicySaving(false);
+    }
+  };
+
   // -------------------- UI helpers --------------------
   const renderEditableField = (
     label: string,
@@ -244,7 +411,27 @@ export function EmergencyContactSettingsDialog({
       <div className="flex items-center gap-2">
         {isEditing ? (
           <>
-            <Input value={value} onChange={(e) => onChange(e.target.value)} />
+            {fieldKey === "phone" ? (
+              <div className="flex-1">
+                <Input
+                  type="tel"
+                  inputMode="tel"
+                  pattern="^\+[1-9]\d{7,14}$"
+                  placeholder="+15551234567"
+                  value={value}
+                  onChange={(e) => onChange(sanitizePhoneInput(e.target.value))}
+                />
+                <p className="text-xs text-muted-foreground mt-1">
+                  Must include country code (E.164), e.g. +15551234567
+                </p>
+              </div>
+            ) : (
+              <Input
+                className="flex-1"
+                value={value}
+                onChange={(e) => onChange(e.target.value)}
+              />
+            )}
             <Button
               size="icon"
               variant="ghost"
@@ -279,18 +466,20 @@ export function EmergencyContactSettingsDialog({
     </div>
   );
 
+  const policyDelayVisible = policyMode === "push_then_call";
+
   // -------------------- Render --------------------
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-[640px] max-h-[80vh] overflow-y-auto">
+      <DialogContent className="sm:max-w-[760px] max-h-[80vh] overflow-y-auto">
         <DialogHeader>
           <DialogTitle>My Settings</DialogTitle>
           <DialogDescription>
-            Edit your profile, notifications, and app settings.
+            Edit your profile, notifications, and escalation preferences.
           </DialogDescription>
         </DialogHeader>
 
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-4">
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mt-4">
           {/* Profile */}
           <div className="space-y-3">
             {renderEditableField(
@@ -376,7 +565,7 @@ export function EmergencyContactSettingsDialog({
             </div>
 
             <div>
-              <Label>Escalation</Label>
+              <Label className="mb-1 block">Escalation (EC prefs)</Label>
               <div className="flex items-center gap-2 mt-1">
                 <Switch
                   checked={escalationEnabled}
@@ -451,6 +640,81 @@ export function EmergencyContactSettingsDialog({
                 placeholder="e.g. America/New_York"
               />
             </div>
+          </div>
+
+          {/* -------------------- Policy editor (per main user) -------------------- */}
+          <div className="md:col-span-2 border rounded-lg p-4 space-y-3">
+            <div className="flex flex-col md:flex-row md:items-end gap-3">
+              <div className="flex-1">
+                <Label>Manage policy for user</Label>
+                <Select
+                  value={selectedMainUserUid}
+                  onValueChange={setSelectedMainUserUid}
+                >
+                  <SelectTrigger className="w-full">
+                    <SelectValue placeholder="Select a main user" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {linkedMainUsers.length === 0 ? (
+                      <div className="px-3 py-2 text-sm text-muted-foreground">
+                        No linked main users found.
+                      </div>
+                    ) : (
+                      linkedMainUsers.map((u) => (
+                        <SelectItem key={u.uid} value={u.uid}>
+                          {u.name || u.uid}
+                        </SelectItem>
+                      ))
+                    )}
+                  </SelectContent>
+                </Select>
+              </div>
+
+              <div className="flex-1">
+                <Label>Policy mode</Label>
+                <Select
+                  value={policyMode}
+                  onValueChange={(v) => setPolicyMode(v as PolicyMode)}
+                >
+                  <SelectTrigger className="w-full">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="push_then_call">
+                      Push first, then call
+                    </SelectItem>
+                    <SelectItem value="call_immediately">
+                      Call immediately
+                    </SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+
+              {policyDelayVisible && (
+                <div className="w-full md:w-48">
+                  <Label>Call delay (sec)</Label>
+                  <Input
+                    type="number"
+                    value={String(policyDelaySec)}
+                    onChange={(e) =>
+                      setPolicyDelaySec(Math.max(0, Number(e.target.value) || 0))
+                    }
+                  />
+                </div>
+              )}
+
+              <div className="mt-2 md:mt-0">
+                <Button onClick={handleSavePolicy} disabled={policySaving}>
+                  {policySaving ? "Saving..." : "Save Policy"}
+                </Button>
+              </div>
+            </div>
+
+            <p className="text-xs text-muted-foreground">
+              This policy is saved on the selected main user’s profile and is
+              used by the scheduler and call workflow. Your personal settings
+              above stay intact.
+            </p>
           </div>
         </div>
 

@@ -168,7 +168,7 @@ export default function SignupPage() {
       await setDoc(
         doc(db, "users", cred.user.uid),
         {
-          uid: cred.user.uid,
+          mainUserUid: cred.user.uid,
           firstName: values.firstName,
           lastName: values.lastName,
           role,

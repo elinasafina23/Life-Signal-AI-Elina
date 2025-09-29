@@ -1,5 +1,4 @@
 // src/app/api/auth/session/route.ts
-
 import { NextRequest, NextResponse } from "next/server";
 import { adminAuth } from "@/lib/firebaseAdmin";
 
@@ -10,36 +9,79 @@ import { adminAuth } from "@/lib/firebaseAdmin";
 const EXPIRES_IN = 60 * 60 * 24 * 5 * 1000; // 5 days
 
 /**
- * Small helper to return JSON responses with "no-store" caching,
- * so auth responses are never cached by the browser/CDN.
+ * OPTIONAL: lock CORS to specific origins in dev/prod.
+ * - You can set ALLOWED_ORIGINS as a comma-separated list.
+ * - If not set, we fallback to reflecting the incoming Origin for same-site dev.
  */
-function json(data: any, init?: ResponseInit) {
+const ALLOWED = (process.env.ALLOWED_ORIGENS ?? process.env.ALLOWED_ORIGINS ?? "")
+  .split(",")
+  .map(s => s.trim())
+  .filter(Boolean);
+
+/** Compute safe CORS headers for this request. */
+function makeCorsHeaders(req: NextRequest): HeadersInit {
+  const origin = req.headers.get("origin") ?? "";
+  // If you configured ALLOWED_ORIGINS, only allow those; otherwise reflect origin.
+  const allowOrigin = ALLOWED.length > 0
+    ? (ALLOWED.includes(origin) ? origin : "")
+    : origin;
+
+  // If we don't recognize the origin, return minimal headers (no ACAO) to let the browser block it.
+  if (!allowOrigin) {
+    return {
+      "Access-Control-Allow-Methods": "GET,POST,DELETE,OPTIONS",
+      "Access-Control-Allow-Headers": "Content-Type, Authorization",
+      "Access-Control-Max-Age": "86400",
+      "Vary": "Origin",
+      "Cache-Control": "no-store",
+    };
+  }
+
+  return {
+    "Access-Control-Allow-Origin": allowOrigin,
+    "Access-Control-Allow-Credentials": "true", // required when sending cookies
+    "Access-Control-Allow-Methods": "GET,POST,DELETE,OPTIONS",
+    "Access-Control-Allow-Headers": "Content-Type, Authorization",
+    "Access-Control-Max-Age": "86400",
+    "Vary": "Origin",
+    "Cache-Control": "no-store",
+  };
+}
+
+/** JSON helper that also injects CORS + no-store */
+function json(req: NextRequest, data: any, init?: ResponseInit) {
   const res = NextResponse.json(data, init);
-  res.headers.set("Cache-Control", "no-store");
+  const headers = makeCorsHeaders(req);
+  Object.entries(headers).forEach(([k, v]) => res.headers.set(k, v));
   return res;
+}
+
+/**
+ * Handle preflight: browser sends OPTIONS before POST/DELETE with credentials.
+ */
+export async function OPTIONS(req: NextRequest) {
+  return new NextResponse(null, {
+    status: 200,
+    headers: makeCorsHeaders(req),
+  });
 }
 
 /**
  * POST /api/auth/session
  *
- * Client flow:
- * 1) The client signs in with Firebase Client SDK and gets an ID token.
- * 2) The client POSTs that ID token here.
+ * Client:
+ * 1) Sign in with Firebase Client SDK to get an ID token.
+ * 2) POST { idToken } here with fetch(..., { method: "POST", credentials: "include" }).
  *
- * Server flow:
- * 1) Verify the ID token (checks signature + revocation).
- * 2) Exchange it for a Firebase "session cookie".
- * 3) Set the session cookie on the response (httpOnly).
- *
- * Result:
- * - Your Next.js app can trust the cookie on subsequent requests
- *   without sending the ID token again.
+ * Server:
+ * 1) Verify ID token.
+ * 2) Create session cookie.
+ * 3) Set httpOnly cookie.
  */
 export async function POST(req: NextRequest) {
   try {
-    // Parse JSON body and extract idToken from the client
     const { idToken } = await req.json();
-    if (!idToken) return json({ error: "idToken required" }, { status: 400 });
+    if (!idToken) return json(req, { error: "idToken required" }, { status: 400 });
 
     // Verify the ID token (2nd arg=true also checks revocation)
     await adminAuth.verifyIdToken(idToken, true);
@@ -49,97 +91,78 @@ export async function POST(req: NextRequest) {
       expiresIn: EXPIRES_IN,
     });
 
-    // Build OK response
-    const res = json({ ok: true });
+    const res = json(req, { ok: true });
 
     /**
      * IMPORTANT:
-     * - When deployed behind Firebase Hosting rewrites, the cookie name
-     *   must be "__session" (Firebase enforces this).
-     * - httpOnly prevents JS from reading it (safer).
-     * - secure only on production (allow http in dev).
-     * - sameSite=lax is a good default for app navigation.
+     * - When deployed behind Firebase Hosting rewrites, the cookie name must be "__session".
+     * - httpOnly prevents JS from reading it.
+     * - If your frontend runs on a different origin and you need the cookie on XHR/fetch,
+     *   use SameSite=None + Secure (required by browsers). If the app is same-site in your env,
+     *   Lax is fine. You can toggle via env if needed.
      */
+    const sameSite =
+      process.env.CROSS_SITE_COOKIES === "true" ? ("none" as const) : ("lax" as const);
+
     res.cookies.set({
       name: "__session",
       value: sessionCookie,
       httpOnly: true,
-      secure: process.env.NODE_ENV === "production",
-      sameSite: "lax",
-      path: "/", // send cookie on all routes
-      maxAge: EXPIRES_IN / 1000, // seconds
+      secure: process.env.NODE_ENV === "production" || sameSite === "none",
+      sameSite, // "lax" (default) or "none" when cross-site
+      path: "/",
+      maxAge: EXPIRES_IN / 1000,
     });
 
     return res;
   } catch (err) {
     console.error("POST /api/auth/session failed:", err);
-    return json({ error: "Could not create session" }, { status: 401 });
+    return json(req, { error: "Could not create session" }, { status: 401 });
   }
 }
 
 /**
  * GET /api/auth/session
- *
- * Server flow:
- * 1) Read the "__session" cookie from the request.
- * 2) Verify it with Admin SDK.
- * 3) Return a "user" object your client can consume.
- *
- * Custom Claims:
- * - If you set custom claims on users (recommended), they'll be present
- *   on the decoded token. For your app, you may set:
- *     { role: "emergency_contact" | "main_user", emergencyContactUid?: string }
- * - Note: the main user's uid is always available as decoded.uid.
+ * Verifies the "__session" cookie and returns a minimal user payload.
  */
 export async function GET(req: NextRequest) {
   try {
-    // Pull the session cookie from request
     const sessionCookie = req.cookies.get("__session")?.value;
-    if (!sessionCookie) {
-      // Not logged in / missing cookie
-      return json({}, { status: 401 });
-    }
+    if (!sessionCookie) return json(req, {}, { status: 401 });
 
-    // Verify the cookie (2nd arg=true also checks revocation)
     const decoded = await adminAuth.verifySessionCookie(sessionCookie, true);
-
-    // All custom claims you set will be on 'decoded'
     const claims = decoded as Record<string, any>;
 
-    // Build a minimal user payload for the client.
-    // - uid: this user's Auth UID (main user or emergency contact).
-    // - role: your app role if you set it in custom claims.
-    // - emergencyContactUid: present only for contacts (if you use it).
     const user = {
-      uid: decoded.uid, // this is the authenticated user's UID
+      uid: decoded.uid,
       email: decoded.email ?? null,
-      role: claims.role ?? null, // e.g., "main_user" | "emergency_contact"
-      emergencyContactUid: claims.emergencyContactUid ?? null, // your new naming
+      role: claims.role ?? null, // e.g. "main_user" | "emergency_contact"
+      emergencyContactUid: claims.emergencyContactUid ?? null,
     };
 
-    return json({ user });
+    return json(req, { user });
   } catch (err) {
     console.error("GET /api/auth/session failed:", err);
-    // Cookie missing/expired/revoked, or invalid token
-    return json({}, { status: 401 });
+    return json(req, {}, { status: 401 });
   }
 }
 
 /**
  * DELETE /api/auth/session
- *
- * Clears the session cookie to "log out" on the server side.
+ * Clears the session cookie (server-side logout).
  */
-export async function DELETE() {
-  const res = json({ ok: true });
+export async function DELETE(req: NextRequest) {
+  const res = json(req, { ok: true });
 
-  // Overwrite with empty value + maxAge=0 to remove the cookie
   res.cookies.set({
     name: "__session",
     value: "",
     httpOnly: true,
-    secure: process.env.NODE_ENV === "production",
-    sameSite: "lax",
+    secure:
+      process.env.NODE_ENV === "production" ||
+      process.env.CROSS_SITE_COOKIES === "true",
+    sameSite:
+      process.env.CROSS_SITE_COOKIES === "true" ? ("none" as const) : ("lax" as const),
     path: "/",
     maxAge: 0,
   });
