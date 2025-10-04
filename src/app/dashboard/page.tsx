@@ -504,7 +504,7 @@ export default function DashboardPage() {
                 <CardDescription>Say “I'm OK” to check in.</CardDescription>
               </CardHeader>
               <CardContent>
-                <VoiceCheckIn />
+                <VoiceCheckIn onCheckIn={handleCheckIn} />
               </CardContent>
             </Card>
           </div>
