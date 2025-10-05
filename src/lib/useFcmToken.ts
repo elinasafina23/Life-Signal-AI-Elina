@@ -71,6 +71,14 @@ export async function registerDevice(uid: string, role?: 'primary' | 'emergency'
     const messaging = (await messagingPromise) as Messaging | null;
     if (!messaging) return;
 
+    if (
+      typeof Notification === 'undefined' ||
+      typeof Notification.requestPermission !== 'function'
+    ) {
+      console.warn('Web Notifications API is unavailable in this environment.');
+      return;
+    }
+
     const permission = await Notification.requestPermission();
     if (permission !== 'granted') {
       console.warn('Notification permission not granted.');
