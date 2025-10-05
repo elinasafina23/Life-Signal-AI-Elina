@@ -21,9 +21,10 @@ import { Footer } from "@/components/footer";
 import { useToast } from "@/hooks/use-toast";
 import { Eye, EyeOff } from "lucide-react";
 
-import { auth } from "@/firebase";
+import { auth, db } from "@/firebase";
 import { signInWithEmailAndPassword } from "firebase/auth";
 import { normalizeRole, Role } from "@/lib/roles";
+import { doc, getDoc } from "firebase/firestore";
 
 /* ---------------- Schema ---------------- */
 // Validate the form with zod (email + non-empty password).
@@ -110,14 +111,35 @@ export default function LoginPage() {
         values.password
       );
 
-      // 2) Fire-and-forget the session cookie creation + invite acceptance.
+      // 2) Resolve the user's actual role from Firestore so we can pick the
+      //     correct destination. This prevents emergency contacts from
+      //     flashing the main dashboard before their Firestore listener
+      //     redirects them away.
+      let resolvedRole: Role = roleFromUrl;
+      try {
+        const profileRef = doc(db, "users", user.uid);
+        const profileSnap = await getDoc(profileRef);
+        const roleFromProfile = normalizeRole(
+          profileSnap.exists() ? (profileSnap.data() as any).role : undefined
+        );
+        if (roleFromProfile) {
+          resolvedRole = roleFromProfile;
+        }
+      } catch (error) {
+        // Ignore Firestore errors — we'll fall back to the role from the URL.
+        console.error("Failed to resolve user role", error);
+      }
+
+      const finalDestination = safeNext(explicitNext, resolvedRole);
+
+      // 3) Fire-and-forget the session cookie creation + invite acceptance.
       void setSessionCookieFast();
       void maybeAutoAcceptInvite(token);
 
-      // 3) Redirect immediately (no waiting).
-      router.replace(destination);
+      // 4) Redirect immediately (no waiting).
+      router.replace(finalDestination);
 
-      // 4) Friendly toast (doesn't block the redirect).
+      // 5) Friendly toast (doesn't block the redirect).
       toast({
         title: "Login Successful",
         description: `Welcome back, ${user.email ?? "user"}!`,
