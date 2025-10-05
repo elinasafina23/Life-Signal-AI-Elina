@@ -9,6 +9,7 @@ import {
   setDoc,
   updateDoc,
   serverTimestamp,
+  deleteField,
 } from "firebase/firestore";
 import { onAuthStateChanged } from "firebase/auth";
 import { useRouter } from "next/navigation";
@@ -53,14 +54,51 @@ interface UserDoc {
   locationSharing?: boolean;
   sosTriggeredAt?: Timestamp;
   role?: string;
+  locationShareReason?: LocationShareReason | null;
+  locationSharedAt?: Timestamp;
 }
 
 type Status = "safe" | "missed" | "unknown";
+
+type LocationShareReason = "sos" | "escalation";
 
 // helper to compute minutes-since-epoch
 const toEpochMinutes = (ms: number) => Math.floor(ms / 60000);
 
 const HOURS_OPTIONS = [1, 2, 3, 6, 10, 12, 18, 24] as const;
+const LOCATION_SHARE_COOLDOWN_MS = 60_000;
+const GEO_PERMISSION_DENIED = 1;
+const GEO_POSITION_UNAVAILABLE = 2;
+const GEO_TIMEOUT = 3;
+
+function describeGeoError(error: unknown) {
+  const defaultMessage =
+    "We couldn't access your current location. Please enable location services and try again.";
+
+  if (!error || typeof error !== "object") {
+    return defaultMessage;
+  }
+
+  const maybeGeo = error as { code?: number; message?: string };
+  if (typeof maybeGeo.code === "number") {
+    switch (maybeGeo.code) {
+      case GEO_PERMISSION_DENIED:
+        return "Location permission was denied. Please enable it in your browser settings and try again.";
+      case GEO_POSITION_UNAVAILABLE:
+        return "Your device couldn't determine your location. Try moving somewhere with a clearer signal and try again.";
+      case GEO_TIMEOUT:
+        return "Locating you took too long. Try again from an area with better reception.";
+      default:
+        break;
+    }
+  }
+
+  if (typeof maybeGeo.message === "string" && maybeGeo.message.trim().length > 0) {
+    return maybeGeo.message;
+  }
+
+  return defaultMessage;
+}
 
 export default function DashboardPage() {
   const router = useRouter();
@@ -71,6 +109,13 @@ export default function DashboardPage() {
   const [status, setStatus] = useState<Status>("unknown");
   const [timeLeft, setTimeLeft] = useState<string>("");
   const [locationSharing, setLocationSharing] = useState<boolean | null>(null);
+  const [locationShareReason, setLocationShareReason] = useState<LocationShareReason | null>(
+    null
+  );
+  const [locationSharedAt, setLocationSharedAt] = useState<Date | null>(null);
+  const [locationMutationPending, setLocationMutationPending] = useState(false);
+  const [clearingLocation, setClearingLocation] = useState(false);
+  const [sharingLocation, setSharingLocation] = useState(false);
   const [roleChecked, setRoleChecked] = useState(false);
   const [userDocLoaded, setUserDocLoaded] = useState(false);
 
@@ -80,6 +125,8 @@ export default function DashboardPage() {
   const userDocUnsubRef = useRef<(() => void) | null>(null);
   const userRef = useRef<ReturnType<typeof doc> | null>(null);
   const autoCheckInTriggeredRef = useRef(false);
+  const lastLocationShareRef = useRef<{ reason: LocationShareReason; ts: number } | null>(null);
+  const prevStatusRef = useRef<Status>("unknown");
 
   // Handle push notifications while app is open
   useEffect(() => {
@@ -181,6 +228,19 @@ export default function DashboardPage() {
           setLocationSharing(data.locationSharing);
         }
 
+        const shareReason = data.locationShareReason;
+        if (shareReason === "sos" || shareReason === "escalation") {
+          setLocationShareReason(shareReason);
+        } else {
+          setLocationShareReason(null);
+        }
+
+        if (data.locationSharedAt instanceof Timestamp) {
+          setLocationSharedAt(data.locationSharedAt.toDate());
+        } else {
+          setLocationSharedAt(null);
+        }
+
         setUserDocLoaded(true);
       });
 
@@ -265,13 +325,222 @@ export default function DashboardPage() {
     return `${d.toLocaleDateString()} ${time}`;
   };
 
+  const clearSharedLocation = useCallback(async () => {
+    const ref = userRef.current;
+    if (!ref) throw new Error("Not signed in");
+
+    await updateDoc(ref, {
+      location: deleteField(),
+      locationShareReason: deleteField(),
+      locationSharedAt: deleteField(),
+    });
+
+    lastLocationShareRef.current = null;
+    setLocationShareReason(null);
+    setLocationSharedAt(null);
+  }, []);
+
+  const shareLocation = useCallback(
+    async (reason: LocationShareReason) => {
+      if (locationSharing !== true) return false;
+
+      const ref = userRef.current;
+      if (!ref) return false;
+
+      if (typeof window === "undefined" || !("geolocation" in navigator)) {
+        toast({
+          title: "Location unavailable",
+          description:
+            "Your device does not support location services. Try another device to share your location.",
+          variant: "destructive",
+        });
+        return false;
+      }
+
+      const last = lastLocationShareRef.current;
+      if (last && last.reason === reason && Date.now() - last.ts < LOCATION_SHARE_COOLDOWN_MS) {
+        return true;
+      }
+
+      setSharingLocation(true);
+
+      try {
+        const position = await new Promise<GeolocationPosition>((resolve, reject) => {
+          navigator.geolocation.getCurrentPosition(resolve, reject, {
+            enableHighAccuracy: true,
+            maximumAge: 0,
+            timeout: 15_000,
+          });
+        });
+
+        const { latitude, longitude } = position.coords;
+        const locationString = `${latitude.toFixed(6)},${longitude.toFixed(6)}`;
+
+        await updateDoc(ref, {
+          location: locationString,
+          locationShareReason: reason,
+          locationSharedAt: serverTimestamp(),
+        });
+
+        lastLocationShareRef.current = { reason, ts: Date.now() };
+        setLocationShareReason(reason);
+        setLocationSharedAt(new Date());
+
+        toast({
+          title: "Location shared",
+          description:
+            reason === "sos"
+              ? "We sent your current location with your SOS alert."
+              : "We shared your current location with your emergency contacts for this escalation.",
+        });
+
+        return true;
+      } catch (error) {
+        toast({
+          title: "Location sharing failed",
+          description: describeGeoError(error),
+          variant: "destructive",
+        });
+        return false;
+      } finally {
+        setSharingLocation(false);
+      }
+    },
+    [locationSharing, toast]
+  );
+
+  const enableLocationSharing = useCallback(async () => {
+    const ref = userRef.current;
+    if (!ref) {
+      toast({
+        title: "Not signed in",
+        description: "Please log in again to update your location preferences.",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    if (typeof window === "undefined" || !("geolocation" in navigator)) {
+      toast({
+        title: "Location unavailable",
+        description:
+          "This device doesn't support location services. Try enabling location on another device.",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    setLocationMutationPending(true);
+
+    try {
+      await new Promise<GeolocationPosition>((resolve, reject) => {
+        navigator.geolocation.getCurrentPosition(resolve, reject, {
+          enableHighAccuracy: true,
+          timeout: 15_000,
+        });
+      });
+
+      await updateDoc(ref, { locationSharing: true });
+      setLocationSharing(true);
+      toast({
+        title: "Location sharing enabled",
+        description: "We only share your location during an SOS alert or escalation.",
+      });
+    } catch (error) {
+      toast({
+        title: "Location permission needed",
+        description: describeGeoError(error),
+        variant: "destructive",
+      });
+    } finally {
+      setLocationMutationPending(false);
+    }
+  }, [toast]);
+
+  const disableLocationSharing = useCallback(async () => {
+    const ref = userRef.current;
+    if (!ref) {
+      toast({
+        title: "Not signed in",
+        description: "Please log in again to update your location preferences.",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    setLocationMutationPending(true);
+
+    try {
+      await updateDoc(ref, {
+        locationSharing: false,
+        location: deleteField(),
+        locationShareReason: deleteField(),
+        locationSharedAt: deleteField(),
+      });
+
+      lastLocationShareRef.current = null;
+      setLocationSharing(false);
+      setLocationShareReason(null);
+      setLocationSharedAt(null);
+
+      toast({
+        title: "Location sharing disabled",
+        description: "We turned off location sharing and cleared the last shared location.",
+      });
+    } catch (error: any) {
+      toast({
+        title: "Unable to update location settings",
+        description: error?.message ?? "Please try again.",
+        variant: "destructive",
+      });
+    } finally {
+      setLocationMutationPending(false);
+    }
+  }, [toast]);
+
+  const handleClearSharedLocation = useCallback(async () => {
+    if (!locationShareReason) return;
+
+    setClearingLocation(true);
+    try {
+      await clearSharedLocation();
+      toast({
+        title: "Location cleared",
+        description: "We removed your last shared location from the emergency dashboard.",
+      });
+    } catch (error: any) {
+      toast({
+        title: "Unable to clear location",
+        description: error?.message ?? "Please try again.",
+        variant: "destructive",
+      });
+    } finally {
+      setClearingLocation(false);
+    }
+  }, [clearSharedLocation, locationShareReason, toast]);
+
   // 🚨 SOS dialer (press & hold → confirm → call)
   const { bind, holding } = useSosDialer({
     phoneNumber: "+78473454308", // TODO: make configurable
     contactName: "Mom",
     holdToActivateMs: 1500,
     confirm: true,
+    onActivate: () => shareLocation("sos"),
   });
+
+  useEffect(() => {
+    const previousStatus = prevStatusRef.current;
+
+    if (status === "missed" && previousStatus !== "missed") {
+      shareLocation("escalation");
+    } else if (previousStatus === "missed" && status !== "missed") {
+      clearSharedLocation().catch((error) => {
+        console.error("Failed to clear shared location after escalation resolved", error);
+      });
+    }
+
+    prevStatusRef.current = status;
+  }, [status, shareLocation, clearSharedLocation]);
 
   // ✅ Manual check-in
   const handleCheckIn = useCallback(
@@ -293,6 +562,14 @@ export default function DashboardPage() {
           missedNotifiedAt: null,
         });
 
+        if (locationShareReason) {
+          try {
+            await clearSharedLocation();
+          } catch (error) {
+            console.error("Failed to clear shared location after check-in", error);
+          }
+        }
+
         if (showToast) {
           toast({
             title: "Checked In!",
@@ -308,7 +585,7 @@ export default function DashboardPage() {
         throw e;
       }
     },
-    [intervalMinutes, toast]
+    [clearSharedLocation, intervalMinutes, locationShareReason, toast]
   );
 
   useEffect(() => {
@@ -508,6 +785,67 @@ export default function DashboardPage() {
                     {locationSharing === null ? "—" : locationSharing ? "Enabled" : "Disabled"}
                   </span>
                 </p>
+              </CardContent>
+            </Card>
+
+            <Card className="shadow-lg">
+              <CardHeader>
+                <CardTitle className="text-2xl font-headline">Location Sharing</CardTitle>
+                <CardDescription>Share your location only when an alert is active.</CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-4 text-left">
+                <p className="text-sm text-muted-foreground">
+                  We only send your location when you press SOS or when an escalation begins.
+                </p>
+                <div className="flex items-center justify-between text-lg">
+                  <span className="font-semibold">Consent</span>
+                  <span
+                    className={`font-bold ${
+                      locationSharing === true
+                        ? "text-green-600"
+                        : locationSharing === false
+                        ? "text-destructive"
+                        : "text-muted-foreground"
+                    }`}
+                  >
+                    {locationSharing === null ? "—" : locationSharing ? "Enabled" : "Disabled"}
+                  </span>
+                </div>
+                {locationShareReason ? (
+                  <p className="text-sm text-muted-foreground">
+                    Last shared for {locationShareReason === "sos" ? "an SOS alert" : "an escalation"}
+                    {locationSharedAt ? ` (${formatWhen(locationSharedAt)})` : ""}.
+                  </p>
+                ) : (
+                  <p className="text-sm text-muted-foreground">
+                    {locationSharing === true
+                      ? "Your location stays hidden until an SOS alert or escalation occurs."
+                      : "Turn this on to optionally send your location during SOS alerts or escalations."}
+                  </p>
+                )}
+                {locationSharing ? (
+                  <div className="flex flex-col gap-2 sm:flex-row">
+                    <Button onClick={disableLocationSharing} disabled={locationMutationPending}>
+                      {locationMutationPending ? "Disabling…" : "Disable & Clear"}
+                    </Button>
+                    <Button
+                      variant="outline"
+                      onClick={handleClearSharedLocation}
+                      disabled={
+                        clearingLocation || locationMutationPending || !locationShareReason
+                      }
+                    >
+                      {clearingLocation ? "Clearing…" : "Clear last share"}
+                    </Button>
+                  </div>
+                ) : (
+                  <Button onClick={enableLocationSharing} disabled={locationMutationPending}>
+                    {locationMutationPending ? "Enabling…" : "Enable location sharing"}
+                  </Button>
+                )}
+                {sharingLocation && (
+                  <p className="text-xs text-muted-foreground">Sharing your current location…</p>
+                )}
               </CardContent>
             </Card>
 
