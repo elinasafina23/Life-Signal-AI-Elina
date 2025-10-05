@@ -1,206 +1,538 @@
-// app/emergency_contact/accept/page.tsx
+// app/emergency-dashboard/page.tsx
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
-import { useSearchParams, useRouter } from "next/navigation";
-import { onAuthStateChanged, signOut } from "firebase/auth";
-import { auth } from "@/firebase";
+import Image from "next/image";
+import { useEffect, useRef, useState } from "react";
+import { useRouter } from "next/navigation";
+import { onAuthStateChanged } from "firebase/auth";
+import { auth, db } from "@/firebase";
+
+// Firestore
+import {
+  collectionGroup,
+  onSnapshot,
+  query,
+  where,
+  doc,
+  getDoc,
+  Timestamp,
+  type Unsubscribe,
+  type Query as FsQuery,
+  type QuerySnapshot,
+  type DocumentData,
+} from "firebase/firestore";
+
+import { Header } from "@/components/header";
+import { Footer } from "@/components/footer";
 import { Button } from "@/components/ui/button";
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+  CardFooter,
+} from "@/components/ui/card";
+import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
+import { Badge } from "@/components/ui/badge";
+import { MapPin, Phone, MessageSquare, Settings as SettingsIcon } from "lucide-react";
+import { useToast } from "@/hooks/use-toast";
 
-/** Server endpoints we call */
-const ACCEPT_API = "/api/emergency_contact/accept";
-const SESSION_API = "/api/auth/session";
+// Centered popup dialog
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogDescription,
+} from "@/components/ui/dialog";
 
-/** Routes we navigate to */
-const SELF_PATH = "/emergency_contact/accept";
-const EMERGENCY_DASH = "/emergency-dashboard";
+// Push registration + roles
+import { registerDevice } from "@/lib/useFcmToken";
+import { normalizeRole } from "@/lib/roles";
 
-/** Create the secure server session cookie from the client ID token */
-async function setSessionCookie(): Promise<boolean> {
-  const u = auth.currentUser;
-  if (!u) return false;
-  const idToken = await u.getIdToken(true);
-  const res = await fetch(SESSION_API, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    credentials: "include",
-    body: JSON.stringify({ idToken }),
-  });
-  return res.ok;
+// ---------------------- Types ----------------------
+export type Status = "OK" | "Inactive" | "SOS";
+
+export type MainUserCard = {
+  mainUserUid: string;
+  name: string;
+  avatar?: string;
+  initials: string;
+  status?: Status;
+  lastCheckIn?: string;
+  location?: string; // address or "lat,lng"
+  locationShareReason?: "sos" | "escalation" | null;
+  locationSharedAt?: Date | null;
+  locationSharing?: boolean;
+  colorClass: string;
+};
+
+export type MainUserDoc = {
+  firstName?: string;
+  lastName?: string;
+  avatar?: string;
+  lastCheckinAt?: Timestamp;
+  checkinInterval?: number | string;
+  sosTriggeredAt?: Timestamp;
+  location?: string; // address or "lat,lng"
+  locationShareReason?: "sos" | "escalation" | null;
+  locationSharedAt?: Timestamp;
+  locationSharing?: boolean;
+  role?: string;
+  dueAtMin?: number; // materialized next deadline (minutes since epoch)
+};
+
+// ---------------------- Helpers ----------------------
+const userColors = [
+  "bg-red-200",
+  "bg-blue-200",
+  "bg-green-200",
+  "bg-yellow-200",
+  "bg-purple-200",
+  "bg-pink-200",
+];
+
+function initialsAndColor(name = "") {
+  const initials =
+    name
+      .split(" ")
+      .map((p) => p[0])
+      .join("")
+      .slice(0, 2)
+      .toUpperCase() || "UA";
+
+  const colorIndex =
+    name.split("").reduce((sum, char) => sum + char.charCodeAt(0), 0) % userColors.length;
+
+  return { initials, colorClass: userColors[colorIndex] };
 }
 
-export default function EmergencyContactAcceptPage() {
-  const params = useSearchParams();
+function getStatusVariant(status?: string) {
+  switch (status) {
+    case "OK":
+      return "default";
+    case "Inactive":
+      return "secondary";
+    case "SOS":
+      return "destructive";
+    default:
+      return "outline";
+  }
+}
+
+function formatWhen(d?: Date | null) {
+  if (!d) return "—";
+  const now = new Date();
+  const sameDay =
+    d.getFullYear() === now.getFullYear() &&
+    d.getMonth() === now.getMonth() &&
+    d.getDate() === now.getDate();
+  const y = new Date(now);
+  y.setDate(now.getDate() - 1);
+  const isYesterday =
+    d.getFullYear() === y.getFullYear() &&
+    d.getMonth() === y.getMonth() &&
+    d.getDate() === y.getDate();
+
+  const time = d.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+  if (sameDay) return `Today at ${time}`;
+  if (isYesterday) return `Yesterday at ${time}`;
+  return `${d.toLocaleDateString()} ${time}`;
+}
+
+function getMapImage(location?: string) {
+  const FALLBACK = {
+    src: "/images/map-fallback-600x300.png",
+    alt: "Map placeholder",
+  } as const;
+
+  if (!location) return FALLBACK;
+
+  const key = process.env.NEXT_PUBLIC_GOOGLE_MAPS_KEY;
+  if (!key) return FALLBACK;
+
+  const q = encodeURIComponent(location.trim());
+  const url = `https://maps.googleapis.com/maps/api/staticmap?center=${q}&zoom=13&size=600x300&maptype=roadmap&markers=color:red|${q}&key=${key}`;
+
+  return { src: url, alt: `Map of ${location}` } as const;
+}
+
+// ---------------------- Page ----------------------
+export default function EmergencyDashboardPage() {
   const router = useRouter();
+  const { toast } = useToast();
 
-  // Extract required params safely
-  const inviteId = (params.get("invite") || "").trim();
-  const token = (params.get("token") || "").trim();
+  const [mainUsers, setMainUsers] = useState<MainUserCard[]>([]);
+  const [loading, setLoading] = useState(true);
 
-  const [status, setStatus] = useState("Checking invite…");
-  const [showSignOut, setShowSignOut] = useState(false);
-  const [busy, setBusy] = useState(false); // prevent double submits
+  // ✅ renamed to the canonical contact id
+  const [emergencyContactUid, setEmergencyContactUid] = useState<string | null>(null);
 
-  // We keep a ref to avoid re-running accept flow twice while auth flips
-  const ranOnceRef = useRef(false);
+  // centered popup when location is missing
+  const [noLocationUser, setNoLocationUser] = useState<MainUserCard | null>(null);
 
-  /**
-   * Where the user should return after login/signup.
-   * We reconstruct the exact current path+query so the flow is resumable.
-   */
-  const returnUrl = useMemo(() => {
-    if (typeof window === "undefined") return SELF_PATH;
-    return `${window.location.pathname}${window.location.search}`;
-  }, []);
+  // keep all active unsubscribers here
+  const unsubsRef = useRef<Record<string, Unsubscribe>>({});
 
   useEffect(() => {
-    // Guard: must have token OR inviteId or we cannot proceed
-    if (!token && !inviteId) {
-      setStatus("Invalid invite link.");
-      return;
-    }
+    const LINKS_KEY = "links";
 
-    const unsub = onAuthStateChanged(auth, async (user) => {
-      // Make sure we don't run the accept flow twice during rapid auth changes
-      if (ranOnceRef.current) return;
-      ranOnceRef.current = true;
+    const unsubAuth = onAuthStateChanged(auth, async (user) => {
+      // clean up any previous listeners
+      Object.values(unsubsRef.current).forEach((fn) => fn());
+      unsubsRef.current = {};
+      setMainUsers([]);
+      setEmergencyContactUid(null);
 
-      // Not signed in → send to signup (as emergency_contact) and bounce back to this page
       if (!user) {
-        setStatus("Please sign in to accept the invite…");
+        setLoading(false);
         router.replace(
-          `/signup?role=emergency_contact&next=${encodeURIComponent(returnUrl)}${
-            token ? `&token=${encodeURIComponent(token)}` : ""
-          }`
+          `/login?role=emergency_contact&next=${encodeURIComponent("/emergency-dashboard")}`
         );
         return;
       }
 
-      // Ensure server session cookie exists before calling our API
-      await setSessionCookie();
-
-      // Try to accept the invite (single-flight)
-      const doAccept = async () => {
-        setBusy(true);
-        setStatus("Linking your account…");
-
-        const body: Record<string, string> = {};
-        if (token) body.token = token;
-        if (inviteId) body.inviteId = inviteId;
-
-        const res = await fetch(ACCEPT_API, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          credentials: "include",
-          body: JSON.stringify(body),
-        });
-
-        if (res.ok) {
-          setStatus("Invite accepted! Redirecting…");
-          router.replace(EMERGENCY_DASH);
-          return;
-        }
-
-        // If unauthenticated, cookie may not be set yet → try once more
-        if (res.status === 401) {
-          const ok = await setSessionCookie();
-          if (ok) {
-            const retry = await fetch(ACCEPT_API, {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              credentials: "include",
-              body: JSON.stringify(body),
-            });
-            if (retry.ok) {
-              setStatus("Invite accepted! Redirecting…");
-              router.replace(EMERGENCY_DASH);
-              return;
-            }
-          }
-          setStatus("Please sign in to accept the invite.");
-          router.replace(
-            `/login?role=emergency_contact&next=${encodeURIComponent(returnUrl)}${
-              token ? `&token=${encodeURIComponent(token)}` : ""
-            }`
-          );
-          return;
-        }
-
-        // If your /accept route enforces verified emails, it may return 403 + EMAIL_NOT_VERIFIED
-        if (res.status === 403) {
-          let msg = "You’re signed in with an account that cannot accept this invite.";
-          try {
-            const { error, verifyRequired } = await res.json();
-            if (error === "EMAIL_NOT_VERIFIED" || verifyRequired) {
-              msg =
-                "Please verify your email address, then return to this link to complete acceptance.";
-            } else {
-              // Wrong role or wrong email case: show sign-out button
-              setShowSignOut(true);
-              msg =
-                "You’re signed in with an account that cannot accept this invite. Please sign out and sign in with the invited email.";
-            }
-          } catch {
-            // fall back to generic
-            setShowSignOut(true);
-          }
-          setStatus(msg);
-          setBusy(false);
-          return;
-        }
-
-        // Generic error: show message from server if present
-        let msg = "Accept failed";
-        try {
-          const { error } = await res.json();
-          if (error) msg = error;
-        } catch {}
-        setStatus(msg);
-        setBusy(false);
-      };
-
+      // gate by role using your users/{uid}.role
       try {
-        await doAccept();
-      } catch (e) {
-        console.error(e);
-        setStatus("Something went wrong while accepting the invite.");
-        setBusy(false);
+        const meSnap = await getDoc(doc(db, "users", user.uid));
+        const myRole = normalizeRole(meSnap.exists() ? (meSnap.data() as any).role : undefined);
+        if (myRole !== "emergency_contact") {
+          router.replace("/dashboard");
+          return;
+        }
+      } catch {
+        router.replace(
+          `/login?role=emergency_contact&next=${encodeURIComponent("/emergency-dashboard")}`
+        );
+        return;
       }
+
+      setEmergencyContactUid(user.uid);
+      setLoading(false);
+
+      // ✅ New canonical link query:
+      // users/{mainUserUid}/emergency_contact/{linkDoc} where emergencyContactUid == current user.uid
+      const linksByEmergencyContactUid = query(
+        collectionGroup(db, "emergency_contact"),
+        where("emergencyContactUid", "==", user.uid)
+      );
+
+      function wireLinksListener(q: FsQuery<DocumentData>, key: string) {
+        unsubsRef.current[key] = onSnapshot(q, (linksSnap: QuerySnapshot<DocumentData>) => {
+          // gather all main user IDs referenced by the link snapshot(s)
+          const nextMainUserIds = new Set<string>(
+            Object.keys(unsubsRef.current).filter((k) => k !== LINKS_KEY)
+          );
+
+          linksSnap.forEach((linkDoc) => {
+            // users/{MAIN_UID}/emergency_contact/{...}
+            const mainUserUid = linkDoc.ref.parent.parent?.id;
+            if (mainUserUid) nextMainUserIds.add(mainUserUid);
+          });
+
+          // remove listeners for unlinked users
+          Object.keys(unsubsRef.current).forEach((k) => {
+            if (k === LINKS_KEY) return;
+            if (!nextMainUserIds.has(k)) {
+              unsubsRef.current[k](); // unsubscribe
+              delete unsubsRef.current[k];
+            }
+          });
+
+          // ensure we are listening to each linked main user doc
+          nextMainUserIds.forEach((mainUserId) => {
+            if (unsubsRef.current[mainUserId]) return;
+
+            const userDocRef = doc(db, "users", mainUserId);
+            unsubsRef.current[mainUserId] = onSnapshot(
+              userDocRef,
+              (userDocSnap) => {
+                const userData = (userDocSnap.data() as MainUserDoc) || undefined;
+
+                const name =
+                  `${userData?.firstName || ""} ${userData?.lastName || ""}`.trim() ||
+                  "Main User";
+                const displayName = `${userData?.firstName || ""} ${
+                  userData?.lastName?.[0] || ""
+                }`.trim();
+                const { initials, colorClass } = initialsAndColor(name);
+
+                const last =
+                  userData?.lastCheckinAt instanceof Timestamp
+                    ? userData.lastCheckinAt.toDate()
+                    : undefined;
+
+                const rawInt = userData?.checkinInterval;
+                const intervalMin =
+                  typeof rawInt === "number" ? rawInt : parseInt(String(rawInt ?? ""), 10) || 12 * 60;
+
+                // ✅ prefer dueAtMin from backend if present
+                const dueAtMin = Number((userData as any)?.dueAtMin);
+                const nowMin = Math.floor(Date.now() / 60000);
+
+                let status: Status = "OK";
+                if (userData?.sosTriggeredAt instanceof Timestamp) {
+                  status = "SOS";
+                } else if (Number.isFinite(dueAtMin)) {
+                  status = nowMin >= dueAtMin ? "Inactive" : "OK";
+                } else if (last) {
+                  const nextDue = last.getTime() + intervalMin * 60 * 1000;
+                  status = Date.now() > nextDue ? "Inactive" : "OK";
+                } else {
+                  status = "Inactive";
+                }
+
+                const shareReason =
+                  userData?.locationShareReason === "sos" ||
+                  userData?.locationShareReason === "escalation"
+                    ? userData.locationShareReason
+                    : null;
+
+                const sharedAt =
+                  userData?.locationSharedAt instanceof Timestamp
+                    ? userData.locationSharedAt.toDate()
+                    : null;
+
+                const hasConsent =
+                  typeof userData?.locationSharing === "boolean"
+                    ? userData.locationSharing
+                    : undefined;
+
+                const locationString = shareReason ? userData?.location || "" : "";
+
+                const updatedCard: MainUserCard = {
+                  mainUserUid: mainUserId,
+                  name: displayName || name,
+                  avatar: userData?.avatar,
+                  initials,
+                  colorClass,
+                  status,
+                  lastCheckIn: formatWhen(last),
+                  location: locationString,
+                  locationShareReason: shareReason,
+                  locationSharedAt: sharedAt,
+                  locationSharing: hasConsent,
+                };
+
+                setMainUsers((prev) => {
+                  const map = new Map(prev.map((u) => [u.mainUserUid, u]));
+                  map.set(mainUserId, updatedCard);
+                  return Array.from(map.values()).sort((a, b) => a.name.localeCompare(b.name));
+                });
+              },
+              (error) => {
+                console.error(`[Emergency Dashboard] User doc listen failed for ${mainUserId}:`, error);
+                const { initials, colorClass } = initialsAndColor("User Load Error");
+                setMainUsers((prev) => {
+                  const map = new Map(prev.map((u) => [u.mainUserUid, u]));
+                  map.set(mainUserId, {
+                    mainUserUid: mainUserId,
+                    name: "User Load Error",
+                    initials,
+                    colorClass,
+                    status: "Inactive",
+                  });
+                  return Array.from(map.values()).sort((a, b) => a.name.localeCompare(b.name));
+                });
+              }
+            );
+          });
+
+          // drop any cards that are no longer linked
+          setMainUsers((prev) => {
+            const valid = new Set(Object.keys(unsubsRef.current).filter((k) => k !== LINKS_KEY));
+            return prev.filter((u) => valid.has(u.mainUserUid));
+          });
+        });
+      }
+
+      wireLinksListener(linksByEmergencyContactUid as FsQuery<DocumentData>, LINKS_KEY);
     });
 
-    return () => unsub();
-  }, [inviteId, token, returnUrl, router]);
+    return () => {
+      // cleanup on unmount
+      unsubAuth();
+      Object.values(unsubsRef.current).forEach((fn) => fn());
+      unsubsRef.current = {};
+    };
+  }, [router]);
 
-  const handleSignOut = async () => {
-    setBusy(true);
-    try {
-      await signOut(auth);
-    } finally {
-      setBusy(false);
-      router.replace(
-        `/login?role=emergency_contact&next=${encodeURIComponent(returnUrl)}${
-          token ? `&token=${encodeURIComponent(token)}` : ""
-        }`
-      );
+  // ensure this contact device is registered to receive pushes
+  useEffect(() => {
+    if (!emergencyContactUid) return;
+    registerDevice(emergencyContactUid, "emergency"); // keep your signature
+  }, [emergencyContactUid]);
+
+  const handleAcknowledge = (userName: string) => {
+    toast({
+      title: "Alert Acknowledged",
+      description: `You are now handling the alert for ${userName}.`,
+    });
+  };
+
+  // Open Google Maps if we have a location; otherwise show centered popup.
+  const handleViewOnMap = (user: MainUserCard) => {
+    const loc = (user.location || "").trim();
+    if (!loc || !user.locationShareReason) {
+      setNoLocationUser(user);
+      return;
     }
+    const mapsUrl = `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(loc)}`;
+    window.open(mapsUrl, "_blank", "noopener,noreferrer");
   };
 
   return (
-    <main className="min-h-[60vh] flex items-center justify-center p-6">
-      <div className="max-w-md w-full space-y-3 text-center">
-        <h1 className="text-2xl font-semibold">Accept Invitation</h1>
-        <p className="text-muted-foreground">{status}</p>
-        <div className="flex gap-2 justify-center">
-          {showSignOut && (
-            <Button variant="destructive" onClick={handleSignOut} disabled={busy}>
-              {busy ? "Signing out…" : "Sign out"}
+    <div className="flex flex-col min-h-screen bg-secondary">
+      <Header />
+      <main className="flex-grow container mx-auto px-4 py-8">
+        <div className="flex items-center justify-between mb-6">
+          <h1 className="text-3xl md:text-4xl font-headline font-bold">
+            Emergency Contact Dashboard
+          </h1>
+          {emergencyContactUid && (
+            <Button variant="outline" onClick={() => router.push("/emergency-settings")}>
+              <SettingsIcon className="h-5 w-5 mr-2" />
+              Settings
             </Button>
           )}
-          <Button onClick={() => router.replace("/")} disabled={busy}>
-            Go Home
-          </Button>
         </div>
-      </div>
-    </main>
+
+        {loading && <p>Loading your people…</p>}
+        {!loading && mainUsers.length === 0 && (
+          <p className="opacity-70">No linked users yet. Ask them to send you an invite.</p>
+        )}
+
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+          {mainUsers.map((p) => {
+            const map = getMapImage(p.location);
+            return (
+              <Card
+                key={p.mainUserUid}
+                className={`shadow-lg hover:shadow-xl transition-shadow ${
+                  p.status === "SOS" ? "border-destructive bg-destructive/10" : ""
+                }`}
+              >
+                <CardHeader className="flex flex-row items-center gap-4">
+                  <Avatar className="h-16 w-16">
+                    <AvatarImage src={p.avatar || ""} alt={p.name} />
+                    <AvatarFallback className={`${p.colorClass} text-foreground`}>
+                      {p.initials}
+                    </AvatarFallback>
+                  </Avatar>
+                  <div>
+                    <CardTitle className="text-2xl font-headline">{p.name}</CardTitle>
+                    <CardDescription>
+                      {p.lastCheckIn ? `Last check-in: ${p.lastCheckIn}` : "—"}
+                    </CardDescription>
+                  </div>
+                </CardHeader>
+
+                <CardContent className="space-y-4">
+                  <div className="flex justify-between items-center">
+                    <p className="font-semibold">Status:</p>
+                    <Badge variant={getStatusVariant(p.status)} className="text-md px-3 py-1">
+                      {p.status || "—"}
+                    </Badge>
+                  </div>
+
+                  <div className="flex justify-between items-center">
+                    <p className="font-semibold">Location status:</p>
+                    <Badge
+                      variant={
+                        p.locationShareReason
+                          ? "secondary"
+                          : p.locationSharing
+                          ? "outline"
+                          : "destructive"
+                      }
+                      className="text-md px-3 py-1"
+                    >
+                      {p.locationShareReason
+                        ? p.locationShareReason === "sos"
+                          ? "Shared for SOS"
+                          : "Shared during escalation"
+                        : p.locationSharing
+                        ? "Waiting for alert"
+                        : "Opted out"}
+                    </Badge>
+                  </div>
+                  <p className="text-sm text-muted-foreground">
+                    {p.locationShareReason
+                      ? `Shared ${
+                          p.locationShareReason === "sos"
+                            ? "for an SOS alert"
+                            : "during an escalation"
+                        }${p.locationSharedAt ? ` at ${formatWhen(p.locationSharedAt)}` : ""}.`
+                      : p.locationSharing
+                      ? "Location will appear here if they trigger SOS or an escalation."
+                      : "They have not granted location sharing, so no location is available."}
+                  </p>
+
+                  <div className="relative h-40 w-full rounded-lg overflow-hidden border">
+                    <Image
+                      src={map.src}
+                      alt={map.alt}
+                      fill
+                      sizes="(max-width: 768px) 100vw, 33vw"
+                      style={{ objectFit: "cover" }}
+                    />
+                    <div className="absolute inset-0 bg-black/20 flex items-center justify-center">
+                      <Button
+                        variant="secondary"
+                        onClick={() => handleViewOnMap(p)}
+                        aria-label={`View ${p.name} on map`}
+                        disabled={!p.locationShareReason || !(p.location || "").trim()}
+                      >
+                        <MapPin className="mr-2 h-4 w-4" />
+                        View on Map
+                      </Button>
+                      {!p.locationShareReason && (
+                        <p className="absolute bottom-3 left-3 right-3 text-center text-xs text-white">
+                          {p.locationSharing
+                            ? "Location becomes available here when an alert is active."
+                            : "This user opted out of location sharing."}
+                        </p>
+                      )}
+                    </div>
+                  </div>
+                </CardContent>
+
+                <CardFooter className="grid grid-cols-2 gap-2">
+                  <Button variant="outline">
+                    <Phone className="mr-2 h-4 w-4" />
+                    Call
+                  </Button>
+                  <Button variant="outline">
+                    <MessageSquare className="mr-2 h-4 w-4" />
+                    Message
+                  </Button>
+                  {p.status === "SOS" && (
+                    <Button className="col-span-2" onClick={() => handleAcknowledge(p.name)}>
+                      Acknowledge Alert
+                    </Button>
+                  )}
+                </CardFooter>
+              </Card>
+            );
+          })}
+        </div>
+      </main>
+      <Footer />
+
+      {/* Centered popup when location is missing */}
+      <Dialog open={!!noLocationUser} onOpenChange={(open) => !open && setNoLocationUser(null)}>
+        <DialogContent className="sm:max-w-[420px]">
+          <DialogHeader>
+            <DialogTitle>Location unavailable</DialogTitle>
+            <DialogDescription>
+              {noLocationUser
+                ? `${noLocationUser.name} has not shared a location right now. Locations only appear during an active SOS or escalation when they have opted in.`
+                : ""}
+            </DialogDescription>
+          </DialogHeader>
+        </DialogContent>
+      </Dialog>
+    </div>
   );
 }

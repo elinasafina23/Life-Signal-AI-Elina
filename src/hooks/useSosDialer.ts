@@ -9,12 +9,14 @@ export function useSosDialer(opts?: {
   contactName?: string;
   holdToActivateMs?: number;
   confirm?: boolean;
+  onActivate?: () => void | Promise<void>;
 }) {
   const {
     phoneNumber = "+78473454308",
     contactName = "Emergency Contact",
     holdToActivateMs = 1500,
     confirm = true,
+    onActivate,
   } = opts || {};
 
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -36,17 +38,26 @@ export function useSosDialer(opts?: {
     return () => cancelAnimationFrame(rafId);
   }, [holding, holdToActivateMs]);
 
-  const completeActivation = () => {
-    // optional confirm
+  const completeActivation = async () => {
     const label = contactName ? ` ${contactName}` : "";
-    if (!confirm || window.confirm(`Call${label}?`)) {
-      const a = document.createElement("a");
-      a.href = `tel:${phoneNumber.replace(/\s+/g, "")}`;
-      a.style.display = "none";
-      document.body.appendChild(a);
-      a.click();
-      a.remove();
+    if (confirm && !window.confirm(`Call${label}?`)) {
+      return;
     }
+
+    if (typeof onActivate === "function") {
+      try {
+        await onActivate();
+      } catch (error) {
+        console.error("useSosDialer onActivate failed", error);
+      }
+    }
+
+    const a = document.createElement("a");
+    a.href = `tel:${phoneNumber.replace(/\s+/g, "")}`;
+    a.style.display = "none";
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
   };
 
   const beginHold = () => {
