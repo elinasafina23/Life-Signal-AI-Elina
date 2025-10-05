@@ -18,6 +18,7 @@ import { Header } from "@/components/header";
 import { Footer } from "@/components/footer";
 import { VoiceCheckIn } from "@/components/voice-check-in";
 import { EmergencyContacts } from "@/components/emergency-contact";
+import { useSosDialer } from "@/hooks/useSosDialer";
 
 // shadcn/ui
 import { Button } from "@/components/ui/button";
@@ -253,26 +254,13 @@ export default function DashboardPage() {
     return `${d.toLocaleDateString()} ${time}`;
   };
 
-  // 🚨 SOS button
-  const handleSOS = async () => {
-    try {
-      if (!userRef.current) throw new Error("Not signed in");
-      await updateDoc(userRef.current, {
-        sosTriggeredAt: serverTimestamp(),
-      });
-      toast({
-        title: "SOS Alert Sent!",
-        description: "Your emergency contacts have been notified.",
-        variant: "destructive",
-      });
-    } catch (e: any) {
-      toast({
-        title: "Unable to send SOS",
-        description: e?.message ?? "Please try again.",
-        variant: "destructive",
-      });
-    }
-  };
+  // 🚨 SOS dialer (press & hold → confirm → call)
+  const { bind, holding } = useSosDialer({
+    phoneNumber: "+78473454308", // TODO: make configurable
+    contactName: "Mom",
+    holdToActivateMs: 1500,
+    confirm: true,
+  });
 
   // ✅ Manual check-in
   const handleCheckIn = async () => {
@@ -378,10 +366,13 @@ export default function DashboardPage() {
               </CardHeader>
               <CardContent>
                 <Button
-                  onClick={handleSOS}
+                  {...bind}
+                  aria-label="Call Mom"
                   variant="destructive"
                   size="lg"
-                  className="h-32 w-32 rounded-full text-2xl shadow-lg hover:scale-105 transition-transform"
+                  className={`h-32 w-32 rounded-full text-2xl shadow-lg transition-transform ${
+                    holding ? "opacity-90" : "hover:scale-105"
+                  }`}
                 >
                   <Siren className="h-16 w-16" />
                 </Button>
@@ -504,7 +495,7 @@ export default function DashboardPage() {
                 <CardDescription>Say “I'm OK” to check in.</CardDescription>
               </CardHeader>
               <CardContent>
-                <VoiceCheckIn />
+                <VoiceCheckIn onCheckIn={handleCheckIn} />
               </CardContent>
             </Card>
           </div>

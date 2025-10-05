@@ -11,10 +11,7 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
-import {
-  assessVoiceCheckIn,
-  type AssessVoiceCheckInOutput,
-} from "@/ai/flows/voice-check-in-assessment";
+import type { AssessVoiceCheckInOutput } from "@/ai/flows/voice-check-in-assessment";
 import { useToast } from "@/hooks/use-toast";
 
 /**
@@ -104,10 +101,22 @@ export function VoiceCheckIn() {
       try {
         // Send to your AI function
         const previousMessages = getPreviousMessages();
-        const result = await assessVoiceCheckIn({
-          transcribedSpeech: currentTranscript,
-          previousVoiceMessages: previousMessages,
+        const response = await fetch("/api/voice-check-in", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            transcribedSpeech: currentTranscript,
+            previousVoiceMessages,
+          }),
         });
+
+        if (!response.ok) {
+          throw new Error(`Voice assessment failed with status ${response.status}`);
+        }
+
+        const result: AssessVoiceCheckInOutput = await response.json();
         setAssessment(result);
 
         toast({
