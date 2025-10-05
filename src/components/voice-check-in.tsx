@@ -104,7 +104,7 @@ export function VoiceCheckIn({ onCheckIn }: VoiceCheckInProps) {
       setIsProcessing(true);
       try {
         // Send to your AI function
-        const previousMessages = getPreviousMessages();
+        const previousVoiceMessages = getPreviousMessages();
         const response = await fetch("/api/voice-check-in", {
           method: "POST",
           headers: {

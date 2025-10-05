@@ -60,6 +60,8 @@ type Status = "safe" | "missed" | "unknown";
 // helper to compute minutes-since-epoch
 const toEpochMinutes = (ms: number) => Math.floor(ms / 60000);
 
+const HOURS_OPTIONS = [1, 2, 3, 6, 10, 12, 18, 24] as const;
+
 export default function DashboardPage() {
   const router = useRouter();
   const { toast } = useToast();
@@ -292,10 +294,10 @@ export default function DashboardPage() {
   };
 
   // Update interval + recompute dueAtMin
-  const HOURS_OPTIONS = [1, 2, 3, 6, 10, 12, 18, 24] as const;
   const selectedHours = useMemo(() => {
     const h = Math.round(intervalMinutes / 60);
-    return HOURS_OPTIONS.includes(h as any) ? String(h) : "12";
+    const isValidOption = HOURS_OPTIONS.some((option) => option === h);
+    return isValidOption ? String(h) : "12";
   }, [intervalMinutes]);
 
   const handleIntervalChange = async (value: string) => {
