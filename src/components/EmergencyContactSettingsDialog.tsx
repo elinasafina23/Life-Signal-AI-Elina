@@ -71,12 +71,17 @@ export function EmergencyContactSettingsDialog({
   const { toast } = useToast();
 
   // -------------------- Local state --------------------
+  type EditableFieldKey = "firstName" | "lastName" | "email" | "phone";
+
   // Profile
   const [firstName, setFirstName] = useState("");
   const [lastName, setLastName] = useState("");
   const [email, setEmail] = useState("");
   const [phone, setPhone] = useState("");
-  const [editField, setEditField] = useState<string | null>(null);
+  const [editField, setEditField] = useState<EditableFieldKey | null>(null);
+  const [fieldDrafts, setFieldDrafts] = useState<
+    Partial<Record<EditableFieldKey, string>>
+  >({});
 
   // Notifications
   const [defaultChannel, setDefaultChannel] =
@@ -399,72 +404,147 @@ export function EmergencyContactSettingsDialog({
   };
 
   // -------------------- UI helpers --------------------
+  const getCommittedValue = (key: EditableFieldKey) => {
+    switch (key) {
+      case "firstName":
+        return firstName;
+      case "lastName":
+        return lastName;
+      case "email":
+        return email;
+      case "phone":
+        return phone;
+      default:
+        return "";
+    }
+  };
+
+  const applyCommittedValue = (key: EditableFieldKey, value: string) => {
+    switch (key) {
+      case "firstName":
+        setFirstName(value);
+        break;
+      case "lastName":
+        setLastName(value);
+        break;
+      case "email":
+        setEmail(value);
+        break;
+      case "phone":
+        setPhone(value);
+        break;
+    }
+  };
+
+  const handleStartEdit = (key: EditableFieldKey) => {
+    setFieldDrafts((prev) => ({ ...prev, [key]: getCommittedValue(key) }));
+    setEditField(key);
+  };
+
+  const handleDraftChange = (key: EditableFieldKey, value: string) => {
+    setFieldDrafts((prev) => ({ ...prev, [key]: value }));
+  };
+
+  const closeEditor = (key: EditableFieldKey) => {
+    setEditField(null);
+    setFieldDrafts((prev) => {
+      const { [key]: _discard, ...rest } = prev;
+      return rest;
+    });
+  };
+
+  const handleConfirmEdit = (key: EditableFieldKey) => {
+    const draftValue = fieldDrafts[key];
+    applyCommittedValue(key, draftValue ?? getCommittedValue(key));
+    closeEditor(key);
+  };
+
+  const handleCancelEdit = (key: EditableFieldKey) => {
+    closeEditor(key);
+  };
+
+  useEffect(() => {
+    if (!open) {
+      setEditField(null);
+      setFieldDrafts({});
+    }
+  }, [open]);
+
   const renderEditableField = (
     label: string,
-    value: string,
-    isEditing: boolean,
-    onChange: (val: string) => void,
-    fieldKey: string
-  ) => (
-    <div className="flex flex-col space-y-1">
-      <Label>{label}</Label>
-      <div className="flex items-center gap-2">
-        {isEditing ? (
-          <>
-            {fieldKey === "phone" ? (
-              <div className="flex-1">
+    fieldKey: EditableFieldKey,
+    isEditing: boolean
+  ) => {
+    const committedValue = getCommittedValue(fieldKey);
+    const value = isEditing
+      ? fieldDrafts[fieldKey] ?? committedValue
+      : committedValue;
+
+    const updateDraft = (val: string) => handleDraftChange(fieldKey, val);
+
+    return (
+      <div className="flex flex-col space-y-1">
+        <Label>{label}</Label>
+        <div className="flex items-center gap-2">
+          {isEditing ? (
+            <>
+              {fieldKey === "phone" ? (
+                <div className="flex-1">
+                  <Input
+                    type="tel"
+                    inputMode="tel"
+                    pattern="^\+[1-9]\d{7,14}$"
+                    placeholder="+15551234567"
+                    value={value}
+                    onChange={(e) =>
+                      updateDraft(sanitizePhoneInput(e.target.value))
+                    }
+                  />
+                  <p className="text-xs text-muted-foreground mt-1">
+                    Must include country code (E.164), e.g. +15551234567
+                  </p>
+                </div>
+              ) : (
                 <Input
-                  type="tel"
-                  inputMode="tel"
-                  pattern="^\+[1-9]\d{7,14}$"
-                  placeholder="+15551234567"
+                  className="flex-1"
                   value={value}
-                  onChange={(e) => onChange(sanitizePhoneInput(e.target.value))}
+                  onChange={(e) => updateDraft(e.target.value)}
                 />
-                <p className="text-xs text-muted-foreground mt-1">
-                  Must include country code (E.164), e.g. +15551234567
-                </p>
-              </div>
-            ) : (
-              <Input
-                className="flex-1"
-                value={value}
-                onChange={(e) => onChange(e.target.value)}
-              />
-            )}
-            <Button
-              size="icon"
-              variant="ghost"
-              onClick={() => setEditField(null)}
-              aria-label="Save"
-            >
-              <Check className="w-4 h-4" />
-            </Button>
-            <Button
-              size="icon"
-              variant="ghost"
-              onClick={() => setEditField(null)}
-              aria-label="Cancel"
-            >
-              <X className="w-4 h-4" />
-            </Button>
-          </>
-        ) : (
-          <>
-            <span className="flex-1 text-sm">{value || "—"}</span>
-            <Button
-              size="icon"
-              variant="ghost"
-              onClick={() => setEditField(fieldKey)}
-              aria-label={`Edit ${label}`}
-            >
-              <Pencil className="w-4 h-4" />
-            </Button>
-          </>
-        )}
+              )}
+              <Button
+                size="icon"
+                variant="ghost"
+                onClick={() => handleConfirmEdit(fieldKey)}
+                aria-label="Save"
+              >
+                <Check className="w-4 h-4" />
+              </Button>
+              <Button
+                size="icon"
+                variant="ghost"
+                onClick={() => handleCancelEdit(fieldKey)}
+                aria-label="Cancel"
+              >
+                <X className="w-4 h-4" />
+              </Button>
+            </>
+          ) : (
+            <>
+              <span className="flex-1 text-sm">{value || "—"}</span>
+              <Button
+                size="icon"
+                variant="ghost"
+                onClick={() => handleStartEdit(fieldKey)}
+                aria-label={`Edit ${label}`}
+              >
+                <Pencil className="w-4 h-4" />
+              </Button>
+            </>
+          )}
+        </div>
       </div>
-    </div>
-  );
+    );
+  };
 
   const policyDelayVisible = policyMode === "push_then_call";
 
@@ -482,34 +562,10 @@ export function EmergencyContactSettingsDialog({
         <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mt-4">
           {/* Profile */}
           <div className="space-y-3">
-            {renderEditableField(
-              "First Name",
-              firstName,
-              editField === "firstName",
-              setFirstName,
-              "firstName"
-            )}
-            {renderEditableField(
-              "Last Name",
-              lastName,
-              editField === "lastName",
-              setLastName,
-              "lastName"
-            )}
-            {renderEditableField(
-              "Email",
-              email,
-              editField === "email",
-              setEmail,
-              "email"
-            )}
-            {renderEditableField(
-              "Phone",
-              phone,
-              editField === "phone",
-              setPhone,
-              "phone"
-            )}
+            {renderEditableField("First Name", "firstName", editField === "firstName")}
+            {renderEditableField("Last Name", "lastName", editField === "lastName")}
+            {renderEditableField("Email", "email", editField === "email")}
+            {renderEditableField("Phone", "phone", editField === "phone")}
           </div>
 
           {/* Notifications & Prefs */}
