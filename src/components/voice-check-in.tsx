@@ -21,7 +21,11 @@ import { useToast } from "@/hooks/use-toast";
  * - Sends the transcript to your AI function to assess anomalies
  * - Presents a simple status + explanation
  */
-export function VoiceCheckIn() {
+export interface VoiceCheckInProps {
+  onCheckIn?: () => void | Promise<void>;
+}
+
+export function VoiceCheckIn({ onCheckIn }: VoiceCheckInProps) {
   /** UI/state flags */
   const [isListening, setIsListening] = useState(false);       // mic actively capturing speech
   const [isProcessing, setIsProcessing] = useState(false);     // AI is running
@@ -100,7 +104,7 @@ export function VoiceCheckIn() {
       setIsProcessing(true);
       try {
         // Send to your AI function
-        const previousMessages = getPreviousMessages();
+        const previousVoiceMessages = getPreviousMessages();
         const response = await fetch("/api/voice-check-in", {
           method: "POST",
           headers: {
@@ -123,6 +127,14 @@ export function VoiceCheckIn() {
           title: "Check-in Complete",
           description: "Your voice check-in has been processed.",
         });
+
+        if (onCheckIn) {
+          try {
+            await onCheckIn();
+          } catch (callbackError) {
+            console.error("Voice check-in callback failed:", callbackError);
+          }
+        }
       } catch (error) {
         console.error("AI assessment failed:", error);
         toast({

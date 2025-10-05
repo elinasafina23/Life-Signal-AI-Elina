@@ -19,6 +19,7 @@ import { Input } from "@/components/ui/input";
 import { Header } from "@/components/header";
 import { Footer } from "@/components/footer";
 import { useToast } from "@/hooks/use-toast";
+import { Eye, EyeOff } from "lucide-react";
 
 import { auth } from "@/firebase";
 import { signInWithEmailAndPassword } from "firebase/auth";
@@ -72,6 +73,7 @@ export default function LoginPage() {
   const { toast } = useToast();
 
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [showPassword, setShowPassword] = useState(false);
 
   // Read query params for role, invite token, and explicit next path.
   const roleFromUrl: Role = normalizeRole(params.get("role")) ?? "main_user";
@@ -188,15 +190,37 @@ export default function LoginPage() {
                     <FormItem>
                       <FormLabel>Password</FormLabel>
                       <FormControl>
-                        <Input
-                          type="password"
-                          placeholder="••••••••"
-                          {...field}
-                          disabled={isSubmitting}
-                          autoComplete="current-password"
-                        />
+                        <div className="relative">
+                          <Input
+                            type={showPassword ? "text" : "password"}
+                            placeholder="••••••••"
+                            {...field}
+                            disabled={isSubmitting}
+                            autoComplete="current-password"
+                          />
+                          <button
+                            type="button"
+                            onClick={() => setShowPassword((prev) => !prev)}
+                            className="absolute inset-y-0 right-0 flex items-center pr-3 text-muted-foreground hover:text-foreground"
+                            aria-label={showPassword ? "Hide password" : "Show password"}
+                          >
+                            {showPassword ? (
+                              <EyeOff className="h-5 w-5" aria-hidden="true" />
+                            ) : (
+                              <Eye className="h-5 w-5" aria-hidden="true" />
+                            )}
+                          </button>
+                        </div>
                       </FormControl>
                       <FormMessage />
+                      <div className="text-right mt-2">
+                        <Link
+                          href="/forgot-password"
+                          className="text-sm font-semibold text-primary hover:underline"
+                        >
+                          Forgot Password?
+                        </Link>
+                      </div>
                     </FormItem>
                   )}
                 />
