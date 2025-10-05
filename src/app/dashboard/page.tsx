@@ -525,7 +525,9 @@ export default function DashboardPage() {
     contactName: "Mom",
     holdToActivateMs: 1500,
     confirm: true,
-    onActivate: () => shareLocation("sos"),
+    onActivate: async () => {
+      await shareLocation("sos");
+    },
   });
 
   useEffect(() => {
