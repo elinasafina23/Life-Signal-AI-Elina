@@ -1,7 +1,7 @@
 // app/dashboard/page.tsx
 "use client";
 
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   onSnapshot,
   doc,
@@ -72,12 +72,14 @@ export default function DashboardPage() {
   const [timeLeft, setTimeLeft] = useState<string>("");
   const [locationSharing, setLocationSharing] = useState<boolean | null>(null);
   const [roleChecked, setRoleChecked] = useState(false);
+  const [userDocLoaded, setUserDocLoaded] = useState(false);
 
   // 👇 renamed to mainUserUid for clarity
   const [mainUserUid, setMainUserUid] = useState<string | null>(null);
 
   const userDocUnsubRef = useRef<(() => void) | null>(null);
   const userRef = useRef<ReturnType<typeof doc> | null>(null);
+  const autoCheckInTriggeredRef = useRef(false);
 
   // Handle push notifications while app is open
   useEffect(() => {
@@ -130,18 +132,23 @@ export default function DashboardPage() {
         setTimeLeft("");
         setLocationSharing(null);
         setRoleChecked(true);
+        setUserDocLoaded(false);
+        autoCheckInTriggeredRef.current = false;
         return;
       }
 
       setMainUserUid(user.uid); // store main user UID
       const uref = doc(db, "users", user.uid);
       userRef.current = uref;
+      setUserDocLoaded(false);
+      autoCheckInTriggeredRef.current = false;
 
       await setDoc(uref, { createdAt: serverTimestamp() }, { merge: true });
 
       const unsub = onSnapshot(uref, (snap) => {
         if (!snap.exists()) {
           setRoleChecked(true);
+          setUserDocLoaded(true);
           return;
         }
         const data = snap.data() as UserDoc;
@@ -173,6 +180,8 @@ export default function DashboardPage() {
         if (typeof data.locationSharing === "boolean") {
           setLocationSharing(data.locationSharing);
         }
+
+        setUserDocLoaded(true);
       });
 
       userDocUnsubRef.current = unsub;
@@ -265,33 +274,52 @@ export default function DashboardPage() {
   });
 
   // ✅ Manual check-in
-  const handleCheckIn = async () => {
-    try {
-      if (!userRef.current) throw new Error("Not signed in");
+  const handleCheckIn = useCallback(
+    async ({ showToast = true }: { showToast?: boolean } = {}) => {
+      try {
+        if (!userRef.current) throw new Error("Not signed in");
 
-      const intervalMin =
-        Number.isFinite(intervalMinutes) && intervalMinutes > 0 ? intervalMinutes : 720;
+        const intervalMin =
+          Number.isFinite(intervalMinutes) && intervalMinutes > 0 ? intervalMinutes : 720;
 
-      const dueAtMin = toEpochMinutes(Date.now()) + intervalMin;
+        const dueAtMin = toEpochMinutes(Date.now()) + intervalMin;
 
-      setLastCheckIn(new Date()); // optimistic UI
+        setLastCheckIn(new Date()); // optimistic UI
 
-      await updateDoc(userRef.current, {
-        checkinEnabled: true,
-        lastCheckinAt: serverTimestamp(),
-        dueAtMin,
-        missedNotifiedAt: null,
-      });
+        await updateDoc(userRef.current, {
+          checkinEnabled: true,
+          lastCheckinAt: serverTimestamp(),
+          dueAtMin,
+          missedNotifiedAt: null,
+        });
 
-      toast({ title: "Checked In!", description: "Your status has been updated to 'OK'." });
-    } catch (e: any) {
-      toast({
-        title: "Check-in failed",
-        description: e?.message ?? "Please try again.",
-        variant: "destructive",
-      });
-    }
-  };
+        if (showToast) {
+          toast({
+            title: "Checked In!",
+            description: "Your status has been updated to 'OK'.",
+          });
+        }
+      } catch (e: any) {
+        toast({
+          title: "Check-in failed",
+          description: e?.message ?? "Please try again.",
+          variant: "destructive",
+        });
+        throw e;
+      }
+    },
+    [intervalMinutes, toast]
+  );
+
+  useEffect(() => {
+    if (autoCheckInTriggeredRef.current) return;
+    if (!roleChecked || !mainUserUid || !userDocLoaded || !userRef.current) return;
+
+    autoCheckInTriggeredRef.current = true;
+    handleCheckIn({ showToast: false }).catch(() => {
+      autoCheckInTriggeredRef.current = false;
+    });
+  }, [handleCheckIn, mainUserUid, roleChecked, userDocLoaded]);
 
   // Update interval + recompute dueAtMin
   const selectedHours = useMemo(() => {
@@ -389,7 +417,7 @@ export default function DashboardPage() {
               </CardHeader>
               <CardContent>
                 <Button
-                  onClick={handleCheckIn}
+                  onClick={() => handleCheckIn()}
                   size="lg"
                   className="h-32 w-32 rounded-full text-2xl shadow-lg bg-green-500 hover:bg-green-600"
                 >
