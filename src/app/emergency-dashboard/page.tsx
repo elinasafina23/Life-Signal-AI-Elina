@@ -62,6 +62,9 @@ export type MainUserCard = {
   status?: Status;
   lastCheckIn?: string;
   location?: string; // address or "lat,lng"
+  locationShareReason?: "sos" | "escalation" | null;
+  locationSharedAt?: Date | null;
+  locationSharing?: boolean;
   colorClass: string;
 };
 
@@ -73,6 +76,9 @@ export type MainUserDoc = {
   checkinInterval?: number | string;
   sosTriggeredAt?: Timestamp;
   location?: string; // address or "lat,lng"
+  locationShareReason?: "sos" | "escalation" | null;
+  locationSharedAt?: Timestamp;
+  locationSharing?: boolean;
   role?: string;
   dueAtMin?: number; // materialized next deadline (minutes since epoch)
 };
@@ -277,6 +283,24 @@ export default function EmergencyDashboardPage() {
                   status = "Inactive";
                 }
 
+                const shareReason =
+                  userData?.locationShareReason === "sos" ||
+                  userData?.locationShareReason === "escalation"
+                    ? userData.locationShareReason
+                    : null;
+
+                const sharedAt =
+                  userData?.locationSharedAt instanceof Timestamp
+                    ? userData.locationSharedAt.toDate()
+                    : null;
+
+                const hasConsent =
+                  typeof userData?.locationSharing === "boolean"
+                    ? userData.locationSharing
+                    : undefined;
+
+                const locationString = shareReason ? userData?.location || "" : "";
+
                 const updatedCard: MainUserCard = {
                   mainUserUid: mainUserId,
                   name: displayName || name,
@@ -285,7 +309,10 @@ export default function EmergencyDashboardPage() {
                   colorClass,
                   status,
                   lastCheckIn: formatWhen(last),
-                  location: userData?.location || "",
+                  location: locationString,
+                  locationShareReason: shareReason,
+                  locationSharedAt: sharedAt,
+                  locationSharing: hasConsent,
                 };
 
                 setMainUsers((prev) => {
@@ -347,7 +374,7 @@ export default function EmergencyDashboardPage() {
   // Open Google Maps if we have a location; otherwise show centered popup.
   const handleViewOnMap = (user: MainUserCard) => {
     const loc = (user.location || "").trim();
-    if (!loc) {
+    if (!loc || !user.locationShareReason) {
       setNoLocationUser(user);
       return;
     }
@@ -409,6 +436,39 @@ export default function EmergencyDashboardPage() {
                     </Badge>
                   </div>
 
+                  <div className="flex justify-between items-center">
+                    <p className="font-semibold">Location status:</p>
+                    <Badge
+                      variant={
+                        p.locationShareReason
+                          ? "secondary"
+                          : p.locationSharing
+                          ? "outline"
+                          : "destructive"
+                      }
+                      className="text-md px-3 py-1"
+                    >
+                      {p.locationShareReason
+                        ? p.locationShareReason === "sos"
+                          ? "Shared for SOS"
+                          : "Shared during escalation"
+                        : p.locationSharing
+                        ? "Waiting for alert"
+                        : "Opted out"}
+                    </Badge>
+                  </div>
+                  <p className="text-sm text-muted-foreground">
+                    {p.locationShareReason
+                      ? `Shared ${
+                          p.locationShareReason === "sos"
+                            ? "for an SOS alert"
+                            : "during an escalation"
+                        }${p.locationSharedAt ? ` at ${formatWhen(p.locationSharedAt)}` : ""}.`
+                      : p.locationSharing
+                      ? "Location will appear here if they trigger SOS or an escalation."
+                      : "They have not granted location sharing, so no location is available."}
+                  </p>
+
                   <div className="relative h-40 w-full rounded-lg overflow-hidden border">
                     <Image
                       src={map.src}
@@ -422,10 +482,18 @@ export default function EmergencyDashboardPage() {
                         variant="secondary"
                         onClick={() => handleViewOnMap(p)}
                         aria-label={`View ${p.name} on map`}
+                        disabled={!p.locationShareReason || !(p.location || "").trim()}
                       >
                         <MapPin className="mr-2 h-4 w-4" />
                         View on Map
                       </Button>
+                      {!p.locationShareReason && (
+                        <p className="absolute bottom-3 left-3 right-3 text-center text-xs text-white">
+                          {p.locationSharing
+                            ? "Location becomes available here when an alert is active."
+                            : "This user opted out of location sharing."}
+                        </p>
+                      )}
                     </div>
                   </div>
                 </CardContent>
@@ -459,7 +527,7 @@ export default function EmergencyDashboardPage() {
             <DialogTitle>Location unavailable</DialogTitle>
             <DialogDescription>
               {noLocationUser
-                ? `${noLocationUser.name} disabled location sharing or hasn’t shared a location yet.`
+                ? `${noLocationUser.name} has not shared a location right now. Locations only appear during an active SOS or escalation when they have opted in.`
                 : ""}
             </DialogDescription>
           </DialogHeader>
