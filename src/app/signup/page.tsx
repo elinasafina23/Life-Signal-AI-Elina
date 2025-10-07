@@ -11,6 +11,7 @@ import * as z from "zod";
 import { Header } from "@/components/header";
 import { Footer } from "@/components/footer";
 import { Button } from "@/components/ui/button";
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import {
   Card,
   CardContent,
@@ -30,6 +31,7 @@ import {
 import { Input } from "@/components/ui/input";
 import { Progress } from "@/components/ui/progress";
 import { useToast } from "@/hooks/use-toast";
+import { Info } from "lucide-react";
 
 import { auth, db } from "@/firebase";
 import {
@@ -216,116 +218,143 @@ export default function SignupPage() {
     <div className="flex flex-col min-h-screen bg-background">
       <Header />
       <main className="flex-grow flex items-center justify-center p-4">
-        <Card className="w-full max-w-lg shadow-xl">
-          <CardHeader className="text-center">
-            <CardTitle className="text-3xl font-headline">Create Your Account</CardTitle>
-            <CardDescription>
-              {role === "emergency_contact"
-                ? "You’re signing up as an emergency contact."
-                : "Create your main user account."}
-            </CardDescription>
-          </CardHeader>
+        <div className="w-full max-w-3xl space-y-6">
+          <Alert className="bg-muted/60">
+            <Info className="h-5 w-5" aria-hidden />
+            <AlertTitle>Prepare your device</AlertTitle>
+            <AlertDescription>
+              <p className="mb-2 text-left">
+                Before you get started, make sure your phone allows Life Signal AI to use these features:
+              </p>
+              <ul className="list-disc space-y-1 pl-4 text-left">
+                <li>
+                  <strong>Microphone</strong> for quick voice check-ins. When prompted, allow access or enable it from your
+                  phone&rsquo;s app settings.
+                </li>
+                <li>
+                  <strong>Notifications</strong> so we can alert you and your emergency contacts if a check-in is missed.
+                </li>
+                <li>
+                  <strong>Location services</strong> to share your position with trusted contacts during an emergency.
+                </li>
+              </ul>
+              <p className="mt-2 text-left">
+                You can update these permissions anytime from your device settings after you finish signing up.
+              </p>
+            </AlertDescription>
+          </Alert>
 
-          <Form {...form}>
-            <form onSubmit={form.handleSubmit(onSubmit)}>
-              <CardContent className="space-y-4">
-                {/* First Name */}
-                <FormField
-                  control={form.control}
-                  name="firstName"
-                  render={({ field }) => (
-                    <FormItem>
-                      <FormLabel>First Name</FormLabel>
-                      <FormControl>
-                        <Input placeholder="John" {...field} disabled={isSubmitting} />
-                      </FormControl>
-                      <FormMessage />
-                    </FormItem>
-                  )}
-                />
+          <Card className="w-full max-w-lg mx-auto shadow-xl">
+            <CardHeader className="text-center">
+              <CardTitle className="text-3xl font-headline">Create Your Account</CardTitle>
+              <CardDescription>
+                {role === "emergency_contact"
+                  ? "You’re signing up as an emergency contact."
+                  : "Create your main user account."}
+              </CardDescription>
+            </CardHeader>
 
-                {/* Last Name */}
-                <FormField
-                  control={form.control}
-                  name="lastName"
-                  render={({ field }) => (
-                    <FormItem>
-                      <FormLabel>Last Name</FormLabel>
-                      <FormControl>
-                        <Input placeholder="Doe" {...field} disabled={isSubmitting} />
-                      </FormControl>
-                      <FormMessage />
-                    </FormItem>
-                  )}
-                />
+            <Form {...form}>
+              <form onSubmit={form.handleSubmit(onSubmit)}>
+                <CardContent className="space-y-4">
+                  {/* First Name */}
+                  <FormField
+                    control={form.control}
+                    name="firstName"
+                    render={({ field }) => (
+                      <FormItem>
+                        <FormLabel>First Name</FormLabel>
+                        <FormControl>
+                          <Input placeholder="John" {...field} disabled={isSubmitting} />
+                        </FormControl>
+                        <FormMessage />
+                      </FormItem>
+                    )}
+                  />
 
-                {/* Email */}
-                <FormField
-                  control={form.control}
-                  name="email"
-                  render={({ field }) => (
-                    <FormItem>
-                      <FormLabel>Email Address</FormLabel>
-                      <FormControl>
-                        <Input type="email" placeholder="you@example.com" {...field} disabled={isSubmitting} />
-                      </FormControl>
-                      <FormMessage />
-                    </FormItem>
-                  )}
-                />
+                  {/* Last Name */}
+                  <FormField
+                    control={form.control}
+                    name="lastName"
+                    render={({ field }) => (
+                      <FormItem>
+                        <FormLabel>Last Name</FormLabel>
+                        <FormControl>
+                          <Input placeholder="Doe" {...field} disabled={isSubmitting} />
+                        </FormControl>
+                        <FormMessage />
+                      </FormItem>
+                    )}
+                  />
 
-                {/* Password */}
-                <FormField
-                  control={form.control}
-                  name="password"
-                  render={({ field }) => (
-                    <FormItem>
-                      <FormLabel>Password</FormLabel>
-                      <FormControl>
-                        <Input type="password" placeholder="••••••••" {...field} disabled={isSubmitting} />
-                      </FormControl>
-                      {field.value && <Progress value={passwordStrength} className="mt-2 h-2" />}
-                      <FormMessage />
-                    </FormItem>
-                  )}
-                />
+                  {/* Email */}
+                  <FormField
+                    control={form.control}
+                    name="email"
+                    render={({ field }) => (
+                      <FormItem>
+                        <FormLabel>Email Address</FormLabel>
+                        <FormControl>
+                          <Input type="email" placeholder="you@example.com" {...field} disabled={isSubmitting} />
+                        </FormControl>
+                        <FormMessage />
+                      </FormItem>
+                    )}
+                  />
 
-                {/* Confirm Password */}
-                <FormField
-                  control={form.control}
-                  name="confirmPassword"
-                  render={({ field }) => (
-                    <FormItem>
-                      <FormLabel>Confirm Password</FormLabel>
-                      <FormControl>
-                        <Input type="password" placeholder="••••••••" {...field} disabled={isSubmitting} />
-                      </FormControl>
-                      <FormMessage />
-                    </FormItem>
-                  )}
-                />
-              </CardContent>
+                  {/* Password */}
+                  <FormField
+                    control={form.control}
+                    name="password"
+                    render={({ field }) => (
+                      <FormItem>
+                        <FormLabel>Password</FormLabel>
+                        <FormControl>
+                          <Input type="password" placeholder="••••••••" {...field} disabled={isSubmitting} />
+                        </FormControl>
+                        {field.value && <Progress value={passwordStrength} className="mt-2 h-2" />}
+                        <FormMessage />
+                      </FormItem>
+                    )}
+                  />
 
-              <CardFooter className="flex-col gap-4">
-                <Button type="submit" className="w-full text-lg py-6" disabled={isSubmitting}>
-                  {isSubmitting ? "Creating…" : "Create Account"}
-                </Button>
+                  {/* Confirm Password */}
+                  <FormField
+                    control={form.control}
+                    name="confirmPassword"
+                    render={({ field }) => (
+                      <FormItem>
+                        <FormLabel>Confirm Password</FormLabel>
+                        <FormControl>
+                          <Input type="password" placeholder="••••••••" {...field} disabled={isSubmitting} />
+                        </FormControl>
+                        <FormMessage />
+                      </FormItem>
+                    )}
+                  />
+                </CardContent>
 
-                <p className="text-center text-sm text-muted-foreground">
-                  Already have an account?{" "}
-                  <Link
-                    href={`/login?role=${encodeURIComponent(role)}${
-                      next ? `&next=${encodeURIComponent(next)}` : ""
-                    }${token ? `&token=${encodeURIComponent(token)}` : ""}`}
-                    className="font-semibold text-primary hover:underline"
-                  >
-                    Sign In
-                  </Link>
-                </p>
-              </CardFooter>
-            </form>
-          </Form>
-        </Card>
+                <CardFooter className="flex-col gap-4">
+                  <Button type="submit" className="w-full text-lg py-6" disabled={isSubmitting}>
+                    {isSubmitting ? "Creating…" : "Create Account"}
+                  </Button>
+
+                  <p className="text-center text-sm text-muted-foreground">
+                    Already have an account?{" "}
+                    <Link
+                      href={`/login?role=${encodeURIComponent(role)}${
+                        next ? `&next=${encodeURIComponent(next)}` : ""
+                      }${token ? `&token=${encodeURIComponent(token)}` : ""}`}
+                      className="font-semibold text-primary hover:underline"
+                    >
+                      Sign In
+                    </Link>
+                  </p>
+                </CardFooter>
+              </form>
+            </Form>
+          </Card>
+        </div>
       </main>
       <Footer />
     </div>

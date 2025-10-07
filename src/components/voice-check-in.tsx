@@ -39,6 +39,41 @@ export function VoiceCheckIn({ onCheckIn }: VoiceCheckInProps) {
   const recognitionRef = useRef<any | null>(null); // use `any` to avoid TS issues with webkit prefix
   const { toast } = useToast();
 
+  const openMicrophoneSettings = () => {
+    if (typeof window === "undefined") return;
+
+    const ua = window.navigator.userAgent || "";
+    if (/iP(hone|od|ad)/i.test(ua)) {
+      window.location.href = "app-settings:";
+      return;
+    }
+
+    if (/Android/i.test(ua)) {
+      window.location.href =
+        "intent://settings#Intent;action=android.settings.APPLICATION_DETAILS_SETTINGS;end";
+
+      setTimeout(() => {
+        if (typeof document !== "undefined" && !document.hidden) {
+          window.open("https://support.google.com/chrome/answer/2693767", "_blank", "noopener");
+        }
+      }, 800);
+      return;
+    }
+
+    window.open("https://support.google.com/chrome/answer/2693767", "_blank", "noopener");
+  };
+
+  const handleMicrophonePermissionDenied = () => {
+    openMicrophoneSettings();
+
+    toast({
+      title: "Microphone permission needed",
+      description:
+        "We tried to open your phone settings. Enable microphone access for Life Signal AI and return to continue your voice check-ins.",
+      variant: "destructive",
+    });
+  };
+
   /**
    * Pull a few most-recent utterances from localStorage.
    * (This is a simple stand-in for “previous messages” history.)
@@ -158,16 +193,19 @@ export function VoiceCheckIn({ onCheckIn }: VoiceCheckInProps) {
       console.error("Speech recognition error:", code);
 
       // Make errors more friendly
-      let message = "Could not recognize speech. Please try again.";
       if (code === "not-allowed" || code === "service-not-allowed") {
-        message = "Microphone permission was denied. Please allow mic access in your browser.";
-      } else if (code === "no-speech") {
-        message = "No speech detected. Try again and speak clearly into the microphone.";
-      } else if (code === "audio-capture") {
-        message = "No microphone found. Please check your audio device.";
+        handleMicrophonePermissionDenied();
+      } else {
+        let message = "Could not recognize speech. Please try again.";
+        if (code === "no-speech") {
+          message = "No speech detected. Try again and speak clearly into the microphone.";
+        } else if (code === "audio-capture") {
+          message = "No microphone found. Please check your audio device.";
+        }
+
+        toast({ title: "Recognition Error", description: message, variant: "destructive" });
       }
 
-      toast({ title: "Recognition Error", description: message, variant: "destructive" });
       setIsListening(false);
       setIsProcessing(false);
     };
@@ -203,7 +241,17 @@ export function VoiceCheckIn({ onCheckIn }: VoiceCheckInProps) {
         recognitionRef.current?.start?.();
       }
     } catch (e) {
-      console.error(e);
+      const err = e as DOMException | Error;
+      if ((err as DOMException)?.name === "NotAllowedError") {
+        handleMicrophonePermissionDenied();
+      } else {
+        console.error(e);
+        toast({
+          title: "Microphone Error",
+          description: "We couldn’t access your microphone. Please check your device settings and try again.",
+          variant: "destructive",
+        });
+      }
     }
   };
 
