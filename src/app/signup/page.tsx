@@ -40,6 +40,7 @@ import {
 import { doc, serverTimestamp, setDoc } from "firebase/firestore";
 
 import { normalizeRole, type Role } from "@/lib/roles";
+import { isValidE164Phone, sanitizePhone } from "@/lib/phone";
 
 /* ---------------- Password policy (unchanged from your version) ---------------- */
 const passwordValidation = z
@@ -50,15 +51,6 @@ const passwordValidation = z
   .regex(/[0-9]/, { message: "Password must contain at least one number." })
   .regex(/[^a-zA-Z0-9]/, { message: "Password must contain at least one special character." });
 
-function sanitizePhoneInput(raw: string) {
-  const trimmed = raw.trim();
-  let normalized = trimmed.replace(/[^\d+]/g, "");
-  normalized = normalized.startsWith("+")
-    ? `+${normalized.slice(1).replace(/\+/g, "")}`
-    : normalized.replace(/\+/g, "");
-  return normalized;
-}
-
 const signupSchema = z
   .object({
     firstName: z.string().min(2, { message: "First name must be at least 2 characters." }),
@@ -67,10 +59,9 @@ const signupSchema = z
     phone: z
       .string()
       .min(1, { message: "Phone number is required." })
-      .refine(
-        (value) => /^\+[1-9]\d{7,14}$/.test(sanitizePhoneInput(value)),
-        { message: "Enter a valid phone number like +15551234567." }
-      ),
+      .refine((value) => isValidE164Phone(value), {
+        message: "Enter a valid phone number like +15551234567.",
+      }),
     password: passwordValidation,
     confirmPassword: z.string(),
   })
@@ -178,7 +169,7 @@ function SignupPageContent() {
     try {
       setIsSubmitting(true);
 
-      const sanitizedPhone = sanitizePhoneInput(values.phone);
+      const sanitizedPhone = sanitizePhone(values.phone);
 
       // 1) Create Firebase user
       const cred = await createUserWithEmailAndPassword(

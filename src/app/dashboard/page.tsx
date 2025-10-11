@@ -54,6 +54,7 @@ import { normalizeRole } from "@/lib/roles";
 
 // push device registration
 import { registerDevice } from "@/lib/useFcmToken";
+import { isValidE164Phone, sanitizePhone } from "@/lib/phone";
 
 interface EmergencyContactsData {
   contact1_firstName?: string;
@@ -91,15 +92,6 @@ const LOCATION_SHARE_COOLDOWN_MS = 60_000;
 const GEO_PERMISSION_DENIED = 1;
 const GEO_POSITION_UNAVAILABLE = 2;
 const GEO_TIMEOUT = 3;
-
-function sanitizePhoneInput(raw: string) {
-  const trimmed = raw.trim();
-  let normalized = trimmed.replace(/[^\d+]/g, "");
-  normalized = normalized.startsWith("+")
-    ? `+${normalized.slice(1).replace(/\+/g, "")}`
-    : normalized.replace(/\+/g, "");
-  return normalized;
-}
 
 function describeGeoError(error: unknown) {
   const defaultMessage =
@@ -344,10 +336,10 @@ export default function DashboardPage() {
         }
 
         const storedPhone =
-          typeof data.phone === "string" ? sanitizePhoneInput(data.phone) : "";
+          typeof data.phone === "string" ? sanitizePhone(data.phone) : "";
         setSavedPhone(storedPhone);
         setPhoneDraft((prev) =>
-          sanitizePhoneInput(prev) === storedPhone ? storedPhone : prev
+          sanitizePhone(prev) === storedPhone ? storedPhone : prev
         );
 
         const contacts = data.emergencyContacts as EmergencyContactsData | undefined;
@@ -368,7 +360,7 @@ export default function DashboardPage() {
 
           const phone =
             typeof contacts.contact1_phone === "string"
-              ? contacts.contact1_phone.trim()
+              ? sanitizePhone(contacts.contact1_phone)
               : "";
           setPrimaryEmergencyContactPhone(phone || null);
         } else {
@@ -826,7 +818,7 @@ export default function DashboardPage() {
 
   // Local "ready" derived from progress (hook returns 0..1)
   const ready = (progress ?? 0) >= 0.999;
-  const phoneDirty = sanitizePhoneInput(phoneDraft) !== savedPhone;
+  const phoneDirty = sanitizePhone(phoneDraft) !== savedPhone;
 
   useEffect(() => {
     const wasActive = prevEscalationActiveRef.current;
@@ -945,8 +937,8 @@ export default function DashboardPage() {
       return;
     }
 
-    const sanitized = sanitizePhoneInput(phoneDraft);
-    if (sanitized && !/^\+[1-9]\d{7,14}$/.test(sanitized)) {
+    const sanitized = sanitizePhone(phoneDraft);
+    if (sanitized && !isValidE164Phone(sanitized)) {
       toast({
         title: "Invalid phone number",
         description: "Use international format like +15551234567.",

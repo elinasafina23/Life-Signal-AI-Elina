@@ -1,4 +1,4 @@
-// app/emergency-dashboard/page.tsx
+// app/emergency_contact/accept/page.tsx
 "use client";
 
 import Image from "next/image";
@@ -50,6 +50,7 @@ import {
 // Push registration + roles
 import { registerDevice } from "@/lib/useFcmToken";
 import { normalizeRole } from "@/lib/roles";
+import { sanitizePhone } from "@/lib/phone";
 
 // ---------------------- Types ----------------------
 export type Status = "OK" | "Inactive" | "SOS";
@@ -303,6 +304,8 @@ export default function EmergencyDashboardPage() {
 
                 const locationString = shareReason ? userData?.location || "" : "";
 
+                const sanitizedPhone = sanitizePhone((userData as any)?.phone);
+
                 const updatedCard: MainUserCard = {
                   mainUserUid: mainUserId,
                   name: displayName || name,
@@ -315,10 +318,7 @@ export default function EmergencyDashboardPage() {
                   locationShareReason: shareReason,
                   locationSharedAt: sharedAt,
                   locationSharing: hasConsent,
-                  phone:
-                    typeof (userData as any)?.phone === "string"
-                      ? (userData as any).phone.trim()
-                      : null,
+                  phone: sanitizedPhone || null,
                 };
 
                 setMainUsers((prev) => {
@@ -512,10 +512,7 @@ export default function EmergencyDashboardPage() {
                 <CardFooter className="grid grid-cols-2 gap-2">
                   {p.phone ? (
                     <Button asChild variant="outline">
-                      <a
-                        href={`tel:${p.phone.replace(/\s+/g, "")}`}
-                        aria-label={`Call ${p.name}`}
-                      >
+                      <a href={`tel:${p.phone}`} aria-label={`Call ${p.name}`}>
                         <Phone className="mr-2 h-4 w-4" />
                         Call
                       </a>
