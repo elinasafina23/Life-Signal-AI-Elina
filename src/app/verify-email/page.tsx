@@ -1,7 +1,7 @@
 // app/verify-email/page.tsx
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { Suspense, useEffect, useMemo, useState } from "react";
 import { useSearchParams, useRouter } from "next/navigation";
 import { auth, db } from "@/firebase";
 import { sendEmailVerification, applyActionCode } from "firebase/auth";
@@ -57,6 +57,14 @@ async function ensureSessionCookie(): Promise<boolean> {
 
 /* ---------------- Page Component ---------------- */
 export default function VerifyEmailPage() {
+  return (
+    <Suspense>
+      <VerifyEmailPageContent />
+    </Suspense>
+  );
+}
+
+function VerifyEmailPageContent() {
   const params = useSearchParams();     // read URL query params
   const router = useRouter();           // programmatic navigation
 
