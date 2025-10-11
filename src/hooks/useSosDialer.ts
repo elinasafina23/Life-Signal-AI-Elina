@@ -39,15 +39,31 @@ export function useSosDialer(opts?: {
   }, [holding, holdToActivateMs]);
 
   const completeActivation = () => {
+    timerRef.current = null;
+    setHolding(false);
+    setProgress(1);
+
     const label = contactName ? ` ${contactName}` : "";
     if (confirm && !window.confirm(`Call${label}?`)) {
       return;
     }
 
     if (typeof onActivate === "function") {
-      Promise.resolve(onActivate()).catch((error) => {
+      try {
+        const result = onActivate();
+        if (
+          result !== null &&
+          typeof result === "object" &&
+          "catch" in result &&
+          typeof (result as Promise<unknown>).catch === "function"
+        ) {
+          (result as Promise<unknown>).catch((error: unknown) => {
+            console.error("useSosDialer onActivate failed", error);
+          });
+        }
+      } catch (error) {
         console.error("useSosDialer onActivate failed", error);
-      });
+      }
     }
 
     const a = document.createElement("a");
@@ -66,7 +82,10 @@ export function useSosDialer(opts?: {
   };
 
   const cancelHold = () => {
-    if (timerRef.current) clearTimeout(timerRef.current);
+    if (timerRef.current) {
+      clearTimeout(timerRef.current);
+      timerRef.current = null;
+    }
     setHolding(false);
     setProgress(0);
   };
