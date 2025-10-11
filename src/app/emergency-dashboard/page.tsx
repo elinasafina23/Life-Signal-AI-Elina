@@ -65,6 +65,7 @@ export type MainUserCard = {
   locationShareReason?: "sos" | "escalation" | null;
   locationSharedAt?: Date | null;
   locationSharing?: boolean;
+  phone?: string | null;
   colorClass: string;
 };
 
@@ -81,6 +82,7 @@ export type MainUserDoc = {
   locationSharing?: boolean;
   role?: string;
   dueAtMin?: number; // materialized next deadline (minutes since epoch)
+  phone?: string | null;
 };
 
 // ---------------------- Helpers ----------------------
@@ -156,6 +158,44 @@ function getMapImage(location?: string) {
   const url = `https://maps.googleapis.com/maps/api/staticmap?center=${q}&zoom=13&size=600x300&maptype=roadmap&markers=color:red|${q}&key=${key}`;
 
   return { src: url, alt: `Map of ${location}` } as const;
+}
+
+function sanitizePhoneForHref(phone?: string | null) {
+  if (!phone) return "";
+  const trimmed = phone.trim();
+  if (!trimmed) return "";
+
+  const hasPlus = trimmed.startsWith("+");
+  const stripped = trimmed.replace(/[^\d+]/g, "");
+  if (!stripped) return "";
+
+  if (hasPlus) {
+    return `+${stripped.replace(/\+/g, "")}`;
+  }
+
+  return stripped.replace(/\+/g, "");
+}
+
+function launchHref(href: string) {
+  if (!href) return;
+  if (typeof window === "undefined") return;
+
+  try {
+    window.location.href = href;
+  } catch (err) {
+    try {
+      window.open(href, "_self");
+    } catch {
+      if (typeof document === "undefined") return;
+      const anchor = document.createElement("a");
+      anchor.href = href;
+      anchor.style.position = "fixed";
+      anchor.style.left = "-9999px";
+      document.body.appendChild(anchor);
+      anchor.click();
+      setTimeout(() => anchor.remove(), 300);
+    }
+  }
 }
 
 // ---------------------- Page ----------------------
@@ -300,6 +340,10 @@ export default function EmergencyDashboardPage() {
                     : undefined;
 
                 const locationString = shareReason ? userData?.location || "" : "";
+                const phone =
+                  typeof (userData as any)?.phone === "string"
+                    ? (userData as any).phone.trim()
+                    : "";
 
                 const updatedCard: MainUserCard = {
                   mainUserUid: mainUserId,
@@ -313,6 +357,7 @@ export default function EmergencyDashboardPage() {
                   locationShareReason: shareReason,
                   locationSharedAt: sharedAt,
                   locationSharing: hasConsent,
+                  phone: phone || null,
                 };
 
                 setMainUsers((prev) => {
@@ -406,6 +451,19 @@ export default function EmergencyDashboardPage() {
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
           {mainUsers.map((p) => {
             const map = getMapImage(p.location);
+            const sanitizedPhone = sanitizePhoneForHref(p.phone);
+            const hasPhone = sanitizedPhone.length > 0;
+
+            const handleCallClick = () => {
+              if (!hasPhone) return;
+              launchHref(`tel:${sanitizedPhone}`);
+            };
+
+            const handleMessageClick = () => {
+              if (!hasPhone) return;
+              launchHref(`sms:${sanitizedPhone}`);
+            };
+
             return (
               <Card
                 key={p.mainUserUid}
@@ -499,11 +557,21 @@ export default function EmergencyDashboardPage() {
                 </CardContent>
 
                 <CardFooter className="grid grid-cols-2 gap-2">
-                  <Button variant="outline">
+                  <Button
+                    variant="outline"
+                    onClick={handleCallClick}
+                    disabled={!hasPhone}
+                    title={!hasPhone ? "Phone number not available" : undefined}
+                  >
                     <Phone className="mr-2 h-4 w-4" />
                     Call
                   </Button>
-                  <Button variant="outline">
+                  <Button
+                    variant="outline"
+                    onClick={handleMessageClick}
+                    disabled={!hasPhone}
+                    title={!hasPhone ? "Phone number not available" : undefined}
+                  >
                     <MessageSquare className="mr-2 h-4 w-4" />
                     Message
                   </Button>
