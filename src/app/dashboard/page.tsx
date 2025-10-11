@@ -56,6 +56,7 @@ interface UserDoc {
   role?: string;
   locationShareReason?: LocationShareReason | null;
   locationSharedAt?: Timestamp;
+  missedNotifiedAt?: Timestamp | null;
 }
 
 type Status = "safe" | "missed" | "unknown";
@@ -113,6 +114,7 @@ export default function DashboardPage() {
     null
   );
   const [locationSharedAt, setLocationSharedAt] = useState<Date | null>(null);
+  const [escalationActiveAt, setEscalationActiveAt] = useState<Date | null>(null);
   const [locationMutationPending, setLocationMutationPending] = useState(false);
   const [clearingLocation, setClearingLocation] = useState(false);
   const [sharingLocation, setSharingLocation] = useState(false);
@@ -126,7 +128,7 @@ export default function DashboardPage() {
   const userRef = useRef<ReturnType<typeof doc> | null>(null);
   const autoCheckInTriggeredRef = useRef(false);
   const lastLocationShareRef = useRef<{ reason: LocationShareReason; ts: number } | null>(null);
-  const prevStatusRef = useRef<Status>("unknown");
+  const prevEscalationActiveRef = useRef(false);
 
   // Handle push notifications while app is open
   useEffect(() => {
@@ -239,6 +241,12 @@ export default function DashboardPage() {
           setLocationSharedAt(data.locationSharedAt.toDate());
         } else {
           setLocationSharedAt(null);
+        }
+
+        if (data.missedNotifiedAt instanceof Timestamp) {
+          setEscalationActiveAt(data.missedNotifiedAt.toDate());
+        } else {
+          setEscalationActiveAt(null);
         }
 
         setUserDocLoaded(true);
@@ -555,18 +563,19 @@ export default function DashboardPage() {
   });
 
   useEffect(() => {
-    const previousStatus = prevStatusRef.current;
+    const wasActive = prevEscalationActiveRef.current;
+    const isActive = Boolean(escalationActiveAt);
 
-    if (status === "missed" && previousStatus !== "missed") {
-      shareLocation("escalation");
-    } else if (previousStatus === "missed" && status !== "missed") {
+    if (isActive && !wasActive) {
+      void shareLocation("escalation");
+    } else if (!isActive && wasActive) {
       clearSharedLocation().catch((error) => {
         console.error("Failed to clear shared location after escalation resolved", error);
       });
     }
 
-    prevStatusRef.current = status;
-  }, [status, shareLocation, clearSharedLocation]);
+    prevEscalationActiveRef.current = isActive;
+  }, [escalationActiveAt, shareLocation, clearSharedLocation]);
 
   // ✅ Manual check-in
   const handleCheckIn = useCallback(
