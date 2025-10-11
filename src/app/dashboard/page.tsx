@@ -346,13 +346,21 @@ export default function DashboardPage() {
     });
 
     lastLocationShareRef.current = null;
+    hasAutoClearedOnActiveRef.current = false;
     setLocationShareReason(null);
     setLocationSharedAt(null);
   }, []);
 
   const shareLocation = useCallback(
     async (reason: LocationShareReason) => {
-      if (locationSharing !== true) return false;
+      if (locationSharing === false) {
+        toast({
+          title: "Location sharing disabled",
+          description: "Enable location sharing first so we can send your SOS location.",
+          variant: "destructive",
+        });
+        return false;
+      }
 
       const ref = userRef.current;
       if (!ref) return false;
@@ -393,6 +401,7 @@ export default function DashboardPage() {
         });
 
         lastLocationShareRef.current = { reason, ts: Date.now() };
+        hasAutoClearedOnActiveRef.current = false;
         setLocationShareReason(reason);
         setLocationSharedAt(new Date());
 
