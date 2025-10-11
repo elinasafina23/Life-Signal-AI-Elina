@@ -38,18 +38,16 @@ export function useSosDialer(opts?: {
     return () => cancelAnimationFrame(rafId);
   }, [holding, holdToActivateMs]);
 
-  const completeActivation = async () => {
+  const completeActivation = () => {
     const label = contactName ? ` ${contactName}` : "";
     if (confirm && !window.confirm(`Call${label}?`)) {
       return;
     }
 
     if (typeof onActivate === "function") {
-      try {
-        await onActivate();
-      } catch (error) {
+      Promise.resolve(onActivate()).catch((error) => {
         console.error("useSosDialer onActivate failed", error);
-      }
+      });
     }
 
     const a = document.createElement("a");

@@ -367,7 +367,12 @@ export default function DashboardPage() {
       }
 
       const last = lastLocationShareRef.current;
-      if (last && last.reason === reason && Date.now() - last.ts < LOCATION_SHARE_COOLDOWN_MS) {
+      const shouldThrottle =
+        reason !== "sos" &&
+        last &&
+        last.reason === reason &&
+        Date.now() - last.ts < LOCATION_SHARE_COOLDOWN_MS;
+      if (shouldThrottle) {
         return true;
       }
 
