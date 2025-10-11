@@ -37,6 +37,7 @@ import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
 import { MapPin, Phone, MessageSquare, Settings as SettingsIcon } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
+import { getSmsHref, getTelHref } from "@/lib/phoneLinks";
 
 // Centered popup dialog
 import {
@@ -121,26 +122,6 @@ function getStatusVariant(status?: string) {
     default:
       return "outline";
   }
-}
-
-function normalizePhoneForLink(phone?: string | null) {
-  if (!phone) return null;
-  const trimmed = String(phone).trim();
-  if (!trimmed) return null;
-  const hasPlus = trimmed.startsWith("+");
-  const digitsOnly = trimmed.replace(/[^\d]/g, "");
-  if (!digitsOnly) return null;
-  return hasPlus ? `+${digitsOnly}` : digitsOnly;
-}
-
-function getTelHref(phone?: string | null) {
-  const normalized = normalizePhoneForLink(phone);
-  return normalized ? `tel:${normalized}` : null;
-}
-
-function getSmsHref(phone?: string | null) {
-  const normalized = normalizePhoneForLink(phone);
-  return normalized ? `sms:${normalized}` : null;
 }
 
 function formatWhen(d?: Date | null) {
