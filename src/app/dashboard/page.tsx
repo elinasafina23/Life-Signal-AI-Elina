@@ -957,14 +957,17 @@ export default function DashboardPage() {
 
     setPhoneSaving(true);
     try {
-      const payload: Record<string, unknown> = { updatedAt: serverTimestamp() };
       if (sanitized) {
-        payload.phone = sanitized;
+        await updateDoc(userRef.current, {
+          phone: sanitized,
+          updatedAt: serverTimestamp(),
+        });
       } else {
-        payload.phone = deleteField();
+        await updateDoc(userRef.current, {
+          phone: deleteField(),
+          updatedAt: serverTimestamp(),
+        });
       }
-
-      await updateDoc(userRef.current, payload);
 
       setSavedPhone(sanitized);
       setPhoneDraft(sanitized);
