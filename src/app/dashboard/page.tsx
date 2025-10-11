@@ -129,6 +129,7 @@ export default function DashboardPage() {
   const autoCheckInTriggeredRef = useRef(false);
   const lastLocationShareRef = useRef<{ reason: LocationShareReason; ts: number } | null>(null);
   const prevEscalationActiveRef = useRef(false);
+  const hasAutoClearedOnActiveRef = useRef(false);
 
   // Handle push notifications while app is open
   useEffect(() => {
@@ -566,16 +567,35 @@ export default function DashboardPage() {
     const wasActive = prevEscalationActiveRef.current;
     const isActive = Boolean(escalationActiveAt);
 
-    if (isActive && !wasActive) {
-      void shareLocation("escalation");
-    } else if (!isActive && wasActive) {
+    if (!isActive && wasActive) {
       clearSharedLocation().catch((error) => {
         console.error("Failed to clear shared location after escalation resolved", error);
       });
     }
 
     prevEscalationActiveRef.current = isActive;
-  }, [escalationActiveAt, shareLocation, clearSharedLocation]);
+  }, [escalationActiveAt, clearSharedLocation]);
+
+  // Automatically clear any previously shared location as soon as the
+  // dashboard is opened or refreshed. This ensures we only share when the
+  // user explicitly triggers SOS.
+  useEffect(() => {
+    if (!userDocLoaded) return;
+    if (!locationShareReason) return;
+    if (hasAutoClearedOnActiveRef.current) return;
+
+    // If a location share happened in this session we don't want to clear it
+    // immediately. That share will set the ref below.
+    if (lastLocationShareRef.current?.reason === locationShareReason) {
+      return;
+    }
+
+    hasAutoClearedOnActiveRef.current = true;
+
+    clearSharedLocation().catch((error) => {
+      console.error("Failed to clear shared location when user became active", error);
+    });
+  }, [clearSharedLocation, locationShareReason, userDocLoaded]);
 
   // ✅ Manual check-in
   const handleCheckIn = useCallback(
