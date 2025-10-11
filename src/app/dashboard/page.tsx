@@ -1015,7 +1015,7 @@ export default function DashboardPage() {
         <h1 className="text-3xl md:text-4xl font-headline font-bold mb-6">Your Dashboard</h1>
         <div className="grid grid-cols-1 gap-6 lg:grid-cols-2 xl:grid-cols-12">
           {/* Primary column */}
-          <div className="grid grid-cols-1 gap-6 sm:grid-cols-2 auto-rows-[minmax(0,1fr)] lg:col-span-1 xl:col-span-7">
+          <div className="grid grid-cols-1 gap-6 sm:grid-cols-2 auto-rows-[minmax(0,18rem)] lg:col-span-1 xl:col-span-7">
             {/* SOS */}
             <Card className="flex h-full flex-col text-center bg-destructive/10 border-destructive shadow-lg hover:shadow-xl transition-shadow">
               <CardHeader>
@@ -1168,7 +1168,7 @@ export default function DashboardPage() {
           </div>
 
           {/* Secondary column */}
-          <div className="space-y-6 lg:col-span-1 xl:col-span-5">
+          <div className="space-y-6 lg:col-span-1 xl:col-span-4 xl:col-start-9">
             <EmergencyContacts />
 
             <Card className="p-4 shadow-lg">
