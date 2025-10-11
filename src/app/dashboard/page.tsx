@@ -20,6 +20,11 @@ import { Footer } from "@/components/footer";
 import { VoiceCheckIn } from "@/components/voice-check-in";
 import { EmergencyContacts } from "@/components/emergency-contact";
 import { useSosDialer } from "@/hooks/useSosDialer";
+import {
+  DEFAULT_EMERGENCY_SERVICE_COUNTRY,
+  EmergencyServiceCountryCode,
+  getEmergencyService,
+} from "@/constants/emergency-services";
 
 // shadcn/ui
 import { Button } from "@/components/ui/button";
@@ -48,6 +53,18 @@ import { normalizeRole } from "@/lib/roles";
 // push device registration
 import { registerDevice } from "@/lib/useFcmToken";
 
+interface EmergencyContactsData {
+  contact1_firstName?: string;
+  contact1_lastName?: string;
+  contact1_email?: string;
+  contact1_phone?: string;
+  emergencyServiceCountry?: EmergencyServiceCountryCode;
+  contact2_firstName?: string;
+  contact2_lastName?: string;
+  contact2_email?: string;
+  contact2_phone?: string;
+}
+
 interface UserDoc {
   lastCheckinAt?: Timestamp;
   checkinInterval?: number | string; // minutes
@@ -57,6 +74,7 @@ interface UserDoc {
   locationShareReason?: LocationShareReason | null;
   locationSharedAt?: Timestamp;
   missedNotifiedAt?: Timestamp | null;
+  emergencyContacts?: EmergencyContactsData;
 }
 
 type Status = "safe" | "missed" | "unknown";
@@ -172,6 +190,12 @@ export default function DashboardPage() {
   const [sharingLocation, setSharingLocation] = useState(false);
   const [roleChecked, setRoleChecked] = useState(false);
   const [userDocLoaded, setUserDocLoaded] = useState(false);
+  const [emergencyServiceCountry, setEmergencyServiceCountry] =
+    useState<EmergencyServiceCountryCode>(DEFAULT_EMERGENCY_SERVICE_COUNTRY);
+  const [primaryEmergencyContactPhone, setPrimaryEmergencyContactPhone] =
+    useState<string | null>(null);
+  const [primaryEmergencyContactName, setPrimaryEmergencyContactName] =
+    useState<string>("Emergency Contact");
 
   // 👇 explicit main user UID
   const [mainUserUid, setMainUserUid] = useState<string | null>(null);
@@ -301,6 +325,33 @@ export default function DashboardPage() {
           setEscalationActiveAt(null);
         }
 
+        const contacts = data.emergencyContacts as EmergencyContactsData | undefined;
+        if (contacts) {
+          const service = getEmergencyService(contacts.emergencyServiceCountry);
+          setEmergencyServiceCountry(service.code);
+
+          const first =
+            typeof contacts.contact1_firstName === "string"
+              ? contacts.contact1_firstName.trim()
+              : "";
+          const last =
+            typeof contacts.contact1_lastName === "string"
+              ? contacts.contact1_lastName.trim()
+              : "";
+          const displayName = [first, last].filter(Boolean).join(" ");
+          setPrimaryEmergencyContactName(displayName || "Emergency Contact");
+
+          const phone =
+            typeof contacts.contact1_phone === "string"
+              ? contacts.contact1_phone.trim()
+              : "";
+          setPrimaryEmergencyContactPhone(phone || null);
+        } else {
+          setEmergencyServiceCountry(DEFAULT_EMERGENCY_SERVICE_COUNTRY);
+          setPrimaryEmergencyContactName("Emergency Contact");
+          setPrimaryEmergencyContactPhone(null);
+        }
+
         setUserDocLoaded(true);
       });
 
@@ -327,6 +378,11 @@ export default function DashboardPage() {
     if (!lastCheckIn) return null;
     return new Date(lastCheckIn.getTime() + intervalMinutes * 60 * 1000);
   }, [lastCheckIn, intervalMinutes]);
+
+  const emergencyService = useMemo(
+    () => getEmergencyService(emergencyServiceCountry),
+    [emergencyServiceCountry]
+  );
 
   // Countdown + status updater
   useEffect(() => {
@@ -635,26 +691,43 @@ export default function DashboardPage() {
     await shareLocation("sos");
 
     // 2) Server-side Telnyx call (does NOT affect scheduled escalation)
-    try {
-      await triggerServerTelnyxCall({
-        // Omit "to" so the Cloud Function can pick the ACTIVE EC server-side.
-        // If you want to force a number from client, add: to: "+178473454308",
-        mainUserUid: mainUserUid ?? undefined,
-      });
-    } catch (err: any) {
-      console.error("Server Telnyx call failed", err);
+    if (primaryEmergencyContactPhone) {
+      try {
+        await triggerServerTelnyxCall({
+          to: primaryEmergencyContactPhone,
+          mainUserUid: mainUserUid ?? undefined,
+        });
+      } catch (err: any) {
+        console.error("Server Telnyx call failed", err);
+        toast({
+          title: "Emergency contact call failed",
+          description:
+            err?.message ??
+            "We couldn’t start the Telnyx call to your emergency contact.",
+          variant: "destructive",
+        });
+      }
+    } else {
       toast({
-        title: "Emergency call (server) failed",
-        description: err?.message ?? "We couldn’t start the emergency call from the server.",
+        title: "Emergency contact number missing",
+        description: `Add a phone number for ${
+          primaryEmergencyContactName || "your emergency contact"
+        } to automatically call them during SOS alerts.`,
         variant: "destructive",
       });
     }
-  }, [shareLocation, toast, mainUserUid]);
+  }, [
+    shareLocation,
+    toast,
+    mainUserUid,
+    primaryEmergencyContactPhone,
+    primaryEmergencyContactName,
+  ]);
 
   // Hook for hold-to-call (device dialer)
   const { bind, holding, progress } = useSosDialer({
-    phoneNumber: "+18473454308", // TODO: configurable or primary EC
-    contactName: "911",
+    phoneNumber: emergencyService.dial,
+    contactName: `Emergency services (${emergencyService.dial})`,
     holdToActivateMs: 1500,
     confirm: true,
     onActivate: triggerSos,
@@ -805,7 +878,9 @@ export default function DashboardPage() {
               <CardHeader>
                 <CardTitle className="text-3xl font-headline text-destructive">Emergency SOS</CardTitle>
                 <CardDescription className="text-destructive/80">
-                  Tap only in a real emergency.
+                  Tap only in a real emergency. We will dial {emergencyService.dial} for
+                  {" "}
+                  {emergencyService.label}.
                 </CardDescription>
               </CardHeader>
               <CardContent>
@@ -816,9 +891,9 @@ export default function DashboardPage() {
                     aria-label={
                       holding
                         ? ready
-                          ? "Release to call 911"
+                          ? `Release to call ${emergencyService.dial}`
                           : `Holding… ${Math.round((progress ?? 0) * 100)} percent`
-                        : "Hold 1.5 seconds to call 911"
+                        : `Hold 1.5 seconds to call ${emergencyService.dial}`
                     }
                   >
                     {/* ring */}
@@ -835,7 +910,11 @@ export default function DashboardPage() {
                     {/* button */}
                     <Button
                       {...bind}
-                      aria-label={ready ? "Release to call 911" : "Hold to call 911"}
+                      aria-label={
+                        ready
+                          ? `Release to call ${emergencyService.dial}`
+                          : `Hold to call ${emergencyService.dial}`
+                      }
                       variant="destructive"
                       size="lg"
                       className={`h-28 w-28 rounded-full text-2xl shadow-lg transition-transform relative z-[1] ${
@@ -848,7 +927,11 @@ export default function DashboardPage() {
 
                   {/* Helper caption */}
                   <p className="text-sm text-destructive/80">
-                    {holding ? (ready ? "Release to call" : "Keep holding…") : "Hold 1.5s to call 911"}
+                    {holding
+                      ? ready
+                        ? `Release to call ${emergencyService.dial}`
+                        : "Keep holding…"
+                      : `Hold 1.5s to call ${emergencyService.dial}`}
                   </p>
                 </div>
               </CardContent>
