@@ -50,6 +50,7 @@ import {
 // Push registration + roles
 import { registerDevice } from "@/lib/useFcmToken";
 import { normalizeRole } from "@/lib/roles";
+import { sanitizePhone } from "@/lib/phone";
 
 // ---------------------- Types ----------------------
 export type Status = "OK" | "Inactive" | "SOS";
@@ -66,6 +67,7 @@ export type MainUserCard = {
   locationSharedAt?: Date | null;
   locationSharing?: boolean;
   colorClass: string;
+  phone?: string | null;
 };
 
 export type MainUserDoc = {
@@ -81,6 +83,7 @@ export type MainUserDoc = {
   locationSharing?: boolean;
   role?: string;
   dueAtMin?: number; // materialized next deadline (minutes since epoch)
+  phone?: string;
 };
 
 // ---------------------- Helpers ----------------------
@@ -301,6 +304,8 @@ export default function EmergencyDashboardPage() {
 
                 const locationString = shareReason ? userData?.location || "" : "";
 
+                const sanitizedPhone = sanitizePhone((userData as any)?.phone);
+
                 const updatedCard: MainUserCard = {
                   mainUserUid: mainUserId,
                   name: displayName || name,
@@ -313,6 +318,7 @@ export default function EmergencyDashboardPage() {
                   locationShareReason: shareReason,
                   locationSharedAt: sharedAt,
                   locationSharing: hasConsent,
+                  phone: sanitizedPhone || null,
                 };
 
                 setMainUsers((prev) => {
@@ -468,6 +474,11 @@ export default function EmergencyDashboardPage() {
                       ? "Location will appear here if they trigger SOS or an escalation."
                       : "They have not granted location sharing, so no location is available."}
                   </p>
+                  <p className="text-sm text-muted-foreground">
+                    {p.phone
+                      ? `Call button dials ${p.phone}.`
+                      : "They haven't added a phone number yet."}
+                  </p>
 
                   <div className="relative h-40 w-full rounded-lg overflow-hidden border">
                     <Image
@@ -499,10 +510,19 @@ export default function EmergencyDashboardPage() {
                 </CardContent>
 
                 <CardFooter className="grid grid-cols-2 gap-2">
-                  <Button variant="outline">
-                    <Phone className="mr-2 h-4 w-4" />
-                    Call
-                  </Button>
+                  {p.phone ? (
+                    <Button asChild variant="outline">
+                      <a href={`tel:${p.phone}`} aria-label={`Call ${p.name}`}>
+                        <Phone className="mr-2 h-4 w-4" />
+                        Call
+                      </a>
+                    </Button>
+                  ) : (
+                    <Button variant="outline" disabled title="No phone number on file">
+                      <Phone className="mr-2 h-4 w-4" />
+                      Call
+                    </Button>
+                  )}
                   <Button variant="outline">
                     <MessageSquare className="mr-2 h-4 w-4" />
                     Message
