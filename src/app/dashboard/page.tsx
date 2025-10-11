@@ -1097,6 +1097,16 @@ export default function DashboardPage() {
               </CardContent>
             </Card>
 
+            <Card className="p-4 shadow-lg sm:col-span-2">
+              <CardHeader>
+                <CardTitle className="text-2xl font-headline">Voice Check-in</CardTitle>
+                <CardDescription>Say “I'm OK” to check in.</CardDescription>
+              </CardHeader>
+              <CardContent>
+                <VoiceCheckIn onCheckIn={handleCheckIn} />
+              </CardContent>
+            </Card>
+
             {/* Status */}
             <Card className="shadow-lg">
               <CardHeader className="flex flex-row items-center justify-between">
@@ -1155,20 +1165,12 @@ export default function DashboardPage() {
                 </p>
               </CardContent>
             </Card>
-
-            <Card className="p-4 shadow-lg sm:col-span-2">
-              <CardHeader>
-                <CardTitle className="text-2xl font-headline">Voice Check-in</CardTitle>
-                <CardDescription>Say “I'm OK” to check in.</CardDescription>
-              </CardHeader>
-              <CardContent>
-                <VoiceCheckIn onCheckIn={handleCheckIn} />
-              </CardContent>
-            </Card>
           </div>
 
           {/* Secondary column */}
           <div className="space-y-6 lg:col-span-1 xl:col-span-5">
+            <EmergencyContacts />
+
             <Card className="p-4 shadow-lg">
               <CardHeader className="pb-4">
                 <CardTitle className="text-2xl font-headline">Your Settings</CardTitle>
@@ -1305,8 +1307,6 @@ export default function DashboardPage() {
                 </section>
               </CardContent>
             </Card>
-
-            <EmergencyContacts />
           </div>
         </div>
       </main>
