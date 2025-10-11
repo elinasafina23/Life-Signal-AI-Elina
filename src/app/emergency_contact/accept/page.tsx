@@ -66,6 +66,7 @@ export type MainUserCard = {
   locationSharedAt?: Date | null;
   locationSharing?: boolean;
   colorClass: string;
+  phone?: string | null;
 };
 
 export type MainUserDoc = {
@@ -81,6 +82,7 @@ export type MainUserDoc = {
   locationSharing?: boolean;
   role?: string;
   dueAtMin?: number; // materialized next deadline (minutes since epoch)
+  phone?: string;
 };
 
 // ---------------------- Helpers ----------------------
@@ -313,6 +315,10 @@ export default function EmergencyDashboardPage() {
                   locationShareReason: shareReason,
                   locationSharedAt: sharedAt,
                   locationSharing: hasConsent,
+                  phone:
+                    typeof (userData as any)?.phone === "string"
+                      ? (userData as any).phone.trim()
+                      : null,
                 };
 
                 setMainUsers((prev) => {
@@ -468,6 +474,11 @@ export default function EmergencyDashboardPage() {
                       ? "Location will appear here if they trigger SOS or an escalation."
                       : "They have not granted location sharing, so no location is available."}
                   </p>
+                  <p className="text-sm text-muted-foreground">
+                    {p.phone
+                      ? `Call button dials ${p.phone}.`
+                      : "They haven't added a phone number yet."}
+                  </p>
 
                   <div className="relative h-40 w-full rounded-lg overflow-hidden border">
                     <Image
@@ -499,10 +510,22 @@ export default function EmergencyDashboardPage() {
                 </CardContent>
 
                 <CardFooter className="grid grid-cols-2 gap-2">
-                  <Button variant="outline">
-                    <Phone className="mr-2 h-4 w-4" />
-                    Call
-                  </Button>
+                  {p.phone ? (
+                    <Button asChild variant="outline">
+                      <a
+                        href={`tel:${p.phone.replace(/\s+/g, "")}`}
+                        aria-label={`Call ${p.name}`}
+                      >
+                        <Phone className="mr-2 h-4 w-4" />
+                        Call
+                      </a>
+                    </Button>
+                  ) : (
+                    <Button variant="outline" disabled title="No phone number on file">
+                      <Phone className="mr-2 h-4 w-4" />
+                      Call
+                    </Button>
+                  )}
                   <Button variant="outline">
                     <MessageSquare className="mr-2 h-4 w-4" />
                     Message

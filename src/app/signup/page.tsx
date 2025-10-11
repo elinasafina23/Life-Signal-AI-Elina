@@ -50,11 +50,27 @@ const passwordValidation = z
   .regex(/[0-9]/, { message: "Password must contain at least one number." })
   .regex(/[^a-zA-Z0-9]/, { message: "Password must contain at least one special character." });
 
+function sanitizePhoneInput(raw: string) {
+  const trimmed = raw.trim();
+  let normalized = trimmed.replace(/[^\d+]/g, "");
+  normalized = normalized.startsWith("+")
+    ? `+${normalized.slice(1).replace(/\+/g, "")}`
+    : normalized.replace(/\+/g, "");
+  return normalized;
+}
+
 const signupSchema = z
   .object({
     firstName: z.string().min(2, { message: "First name must be at least 2 characters." }),
     lastName: z.string().min(2, { message: "Last name must be at least 2 characters." }),
     email: z.string().email({ message: "Please enter a valid email." }),
+    phone: z
+      .string()
+      .min(1, { message: "Phone number is required." })
+      .refine(
+        (value) => /^\+[1-9]\d{7,14}$/.test(sanitizePhoneInput(value)),
+        { message: "Enter a valid phone number like +15551234567." }
+      ),
     password: passwordValidation,
     confirmPassword: z.string(),
   })
@@ -138,6 +154,7 @@ function SignupPageContent() {
       firstName: "",
       lastName: "",
       email: "",
+      phone: "",
       password: "",
       confirmPassword: "",
     },
@@ -161,6 +178,8 @@ function SignupPageContent() {
     try {
       setIsSubmitting(true);
 
+      const sanitizedPhone = sanitizePhoneInput(values.phone);
+
       // 1) Create Firebase user
       const cred = await createUserWithEmailAndPassword(
         auth,
@@ -181,6 +200,7 @@ function SignupPageContent() {
           lastName: values.lastName,
           role,
           email: cred.user.email ?? values.email.trim().toLowerCase(),
+          phone: sanitizedPhone,
           createdAt: serverTimestamp(),
           updatedAt: serverTimestamp(),
         },
@@ -277,6 +297,28 @@ function SignupPageContent() {
                       <FormControl>
                         <Input type="email" placeholder="you@example.com" {...field} disabled={isSubmitting} />
                       </FormControl>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
+
+                {/* Phone */}
+                <FormField
+                  control={form.control}
+                  name="phone"
+                  render={({ field }) => (
+                    <FormItem>
+                      <FormLabel>Mobile Phone</FormLabel>
+                      <FormControl>
+                        <Input
+                          placeholder="+15551234567"
+                          {...field}
+                          disabled={isSubmitting}
+                        />
+                      </FormControl>
+                      <p className="text-xs text-muted-foreground">
+                        Used when your emergency contacts tap “Call”. Include country code.
+                      </p>
                       <FormMessage />
                     </FormItem>
                   )}

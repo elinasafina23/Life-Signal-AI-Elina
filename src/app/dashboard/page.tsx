@@ -28,6 +28,8 @@ import {
 
 // shadcn/ui
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import {
   Card,
   CardContent,
@@ -75,6 +77,7 @@ interface UserDoc {
   locationSharedAt?: Timestamp;
   missedNotifiedAt?: Timestamp | null;
   emergencyContacts?: EmergencyContactsData;
+  phone?: string;
 }
 
 type Status = "safe" | "missed" | "unknown";
@@ -88,6 +91,15 @@ const LOCATION_SHARE_COOLDOWN_MS = 60_000;
 const GEO_PERMISSION_DENIED = 1;
 const GEO_POSITION_UNAVAILABLE = 2;
 const GEO_TIMEOUT = 3;
+
+function sanitizePhoneInput(raw: string) {
+  const trimmed = raw.trim();
+  let normalized = trimmed.replace(/[^\d+]/g, "");
+  normalized = normalized.startsWith("+")
+    ? `+${normalized.slice(1).replace(/\+/g, "")}`
+    : normalized.replace(/\+/g, "");
+  return normalized;
+}
 
 function describeGeoError(error: unknown) {
   const defaultMessage =
@@ -196,6 +208,9 @@ export default function DashboardPage() {
     useState<string | null>(null);
   const [primaryEmergencyContactName, setPrimaryEmergencyContactName] =
     useState<string>("Emergency Contact");
+  const [savedPhone, setSavedPhone] = useState<string>("");
+  const [phoneDraft, setPhoneDraft] = useState<string>("");
+  const [phoneSaving, setPhoneSaving] = useState(false);
 
   // 👇 explicit main user UID
   const [mainUserUid, setMainUserUid] = useState<string | null>(null);
@@ -259,6 +274,9 @@ export default function DashboardPage() {
         setRoleChecked(true);
         setUserDocLoaded(false);
         autoCheckInTriggeredRef.current = false;
+        setSavedPhone("");
+        setPhoneDraft("");
+        setPhoneSaving(false);
         return;
       }
 
@@ -324,6 +342,13 @@ export default function DashboardPage() {
         } else {
           setEscalationActiveAt(null);
         }
+
+        const storedPhone =
+          typeof data.phone === "string" ? sanitizePhoneInput(data.phone) : "";
+        setSavedPhone(storedPhone);
+        setPhoneDraft((prev) =>
+          sanitizePhoneInput(prev) === storedPhone ? storedPhone : prev
+        );
 
         const contacts = data.emergencyContacts as EmergencyContactsData | undefined;
         if (contacts) {
@@ -801,6 +826,7 @@ export default function DashboardPage() {
 
   // Local "ready" derived from progress (hook returns 0..1)
   const ready = (progress ?? 0) >= 0.999;
+  const phoneDirty = sanitizePhoneInput(phoneDraft) !== savedPhone;
 
   useEffect(() => {
     const wasActive = prevEscalationActiveRef.current;
@@ -908,6 +934,61 @@ export default function DashboardPage() {
       });
     }
   };
+
+  const handlePhoneSave = useCallback(async () => {
+    if (!userRef.current) {
+      toast({
+        title: "Not signed in",
+        description: "Please log in again to update your phone number.",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    const sanitized = sanitizePhoneInput(phoneDraft);
+    if (sanitized && !/^\+[1-9]\d{7,14}$/.test(sanitized)) {
+      toast({
+        title: "Invalid phone number",
+        description: "Use international format like +15551234567.",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    setPhoneSaving(true);
+    try {
+      const payload: Record<string, unknown> = { updatedAt: serverTimestamp() };
+      if (sanitized) {
+        payload.phone = sanitized;
+      } else {
+        payload.phone = deleteField();
+      }
+
+      await updateDoc(userRef.current, payload);
+
+      setSavedPhone(sanitized);
+      setPhoneDraft(sanitized);
+      toast({
+        title: "Phone number updated",
+        description: sanitized
+          ? "Emergency contacts will call this number from their dashboard."
+          : "Phone number removed. Add one to enable Call links.",
+      });
+    } catch (error: any) {
+      console.error("Failed to update phone", error);
+      toast({
+        title: "Update failed",
+        description: error?.message ?? "Please try again.",
+        variant: "destructive",
+      });
+    } finally {
+      setPhoneSaving(false);
+    }
+  }, [phoneDraft, toast]);
+
+  const handlePhoneReset = useCallback(() => {
+    setPhoneDraft(savedPhone);
+  }, [savedPhone]);
 
   // Prevent flashing dashboard before role check
   if (!roleChecked) {
@@ -1172,7 +1253,48 @@ export default function DashboardPage() {
           </div>
 
           {/* Right column */}
-          <div className="lg:col-span-1">
+          <div className="lg:col-span-1 space-y-6">
+            <Card className="p-4 shadow-lg">
+              <CardHeader>
+                <CardTitle className="text-2xl font-headline">Emergency Callback</CardTitle>
+                <CardDescription>
+                  Emergency contacts tap “Call” to reach you at this number.
+                </CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                <div className="space-y-2">
+                  <Label htmlFor="main-user-phone">Mobile phone</Label>
+                  <Input
+                    id="main-user-phone"
+                    placeholder="+15551234567"
+                    value={phoneDraft}
+                    onChange={(event) => setPhoneDraft(event.target.value)}
+                    disabled={phoneSaving}
+                    inputMode="tel"
+                  />
+                  <p className="text-xs text-muted-foreground">
+                    Include country code. We’ll auto-format for emergency contacts.
+                  </p>
+                </div>
+                <div className="flex flex-col gap-2 sm:flex-row">
+                  <Button
+                    onClick={handlePhoneSave}
+                    disabled={phoneSaving || !phoneDirty}
+                    className="sm:flex-1"
+                  >
+                    {phoneSaving ? "Saving…" : "Save number"}
+                  </Button>
+                  <Button
+                    variant="outline"
+                    onClick={handlePhoneReset}
+                    disabled={phoneSaving || !phoneDirty}
+                  >
+                    Cancel
+                  </Button>
+                </div>
+              </CardContent>
+            </Card>
+
             <Card className="p-4 shadow-lg">
               <CardHeader>
                 <CardTitle className="text-2xl font-headline">Voice Check-in</CardTitle>
