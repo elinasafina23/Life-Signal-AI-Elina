@@ -1084,9 +1084,8 @@ export default function DashboardPage() {
             <Card className="flex h-full flex-col text-center shadow-lg hover:shadow-xl transition-shadow">
               <CardHeader>
                 <CardTitle className="text-3xl font-headline">Manual Check-in</CardTitle>
-                <CardDescription>Let your emergency contacts know you're safe.</CardDescription>
               </CardHeader>
-              <CardContent className="flex flex-1 items-center justify-center">
+              <CardContent className="flex flex-1 flex-col items-center justify-center gap-6">
                 <Button
                   onClick={() => handleCheckIn()}
                   size="lg"
@@ -1094,6 +1093,9 @@ export default function DashboardPage() {
                 >
                   <CheckCircle2 className="h-16 w-16" />
                 </Button>
+                <p className="text-2xl font-semibold text-muted-foreground">
+                  Press the button to check in.
+                </p>
               </CardContent>
             </Card>
 
