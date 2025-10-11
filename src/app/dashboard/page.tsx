@@ -94,6 +94,12 @@ const GEO_PERMISSION_DENIED = 1;
 const GEO_POSITION_UNAVAILABLE = 2;
 const GEO_TIMEOUT = 3;
 
+const PRIMARY_CARD_BASE_CLASSES =
+  "flex min-h-[20rem] flex-col shadow-lg transition-shadow hover:shadow-xl";
+const PRIMARY_CARD_HEADER_CLASSES = "space-y-3 text-center";
+const PRIMARY_CARD_TITLE_CLASSES = "text-3xl font-headline font-semibold";
+const PRIMARY_CARD_DESCRIPTION_CLASSES = "text-lg text-muted-foreground";
+
 function describeGeoError(error: unknown) {
   const defaultMessage =
     "We couldn't access your current location. Please enable location services and try again.";
@@ -1017,16 +1023,20 @@ export default function DashboardPage() {
           {/* Primary column */}
           <div className="grid grid-cols-1 gap-6 sm:grid-cols-2 auto-rows-[minmax(20rem,_1fr)] lg:col-span-1 xl:col-span-7">
             {/* SOS */}
-            <Card className="flex h-full min-h-[20rem] flex-col text-center bg-destructive/10 border-destructive shadow-lg hover:shadow-xl transition-shadow">
-              <CardHeader className="space-y-2">
-                <CardTitle className="text-3xl font-headline font-semibold text-destructive">Emergency SOS</CardTitle>
-                <CardDescription className="text-lg font-medium text-destructive/80">
+            <Card
+              className={`${PRIMARY_CARD_BASE_CLASSES} border border-destructive bg-destructive/10 text-center`}
+            >
+              <CardHeader className={PRIMARY_CARD_HEADER_CLASSES}>
+                <CardTitle className={`${PRIMARY_CARD_TITLE_CLASSES} text-destructive`}>
+                  Emergency SOS
+                </CardTitle>
+                <CardDescription className={`${PRIMARY_CARD_DESCRIPTION_CLASSES} font-medium text-destructive/80`}>
                   Tap only in a real emergency. We will dial {emergencyService.dial} for
                   {" "}
                   {emergencyService.label}.
                 </CardDescription>
               </CardHeader>
-              <CardContent className="flex flex-1 flex-col justify-center">
+              <CardContent className="flex flex-1 flex-col items-center justify-center gap-4">
                 <div className="flex flex-col items-center gap-3" aria-live="polite">
                   {/* Radial progress ring around the button */}
                   <div
@@ -1081,11 +1091,14 @@ export default function DashboardPage() {
             </Card>
 
             {/* Manual Check-in */}
-            <Card className="flex h-full min-h-[20rem] flex-col text-center shadow-lg hover:shadow-xl transition-shadow">
-              <CardHeader className="space-y-2">
-                <CardTitle className="text-3xl font-headline font-semibold">Manual Check-in</CardTitle>
+            <Card className={`${PRIMARY_CARD_BASE_CLASSES} text-center`}>
+              <CardHeader className={PRIMARY_CARD_HEADER_CLASSES}>
+                <CardTitle className={PRIMARY_CARD_TITLE_CLASSES}>Manual Check-in</CardTitle>
+                <CardDescription className={PRIMARY_CARD_DESCRIPTION_CLASSES}>
+                  Check in manually whenever you need.
+                </CardDescription>
               </CardHeader>
-              <CardContent className="flex flex-1 flex-col items-center justify-center gap-6">
+              <CardContent className="flex flex-1 flex-col items-center justify-center gap-6 text-center">
                 <Button
                   onClick={() => handleCheckIn()}
                   size="lg"
@@ -1099,10 +1112,12 @@ export default function DashboardPage() {
               </CardContent>
             </Card>
 
-            <Card className="flex h-full min-h-[20rem] flex-col p-4 shadow-lg">
-              <CardHeader className="space-y-2 text-center">
-                <CardTitle className="text-3xl font-headline font-semibold">Voice Check-in</CardTitle>
-                <CardDescription className="text-lg text-muted-foreground">Say “I'm OK” to check in.</CardDescription>
+            <Card className={`${PRIMARY_CARD_BASE_CLASSES} p-4 text-center`}>
+              <CardHeader className={PRIMARY_CARD_HEADER_CLASSES}>
+                <CardTitle className={PRIMARY_CARD_TITLE_CLASSES}>Voice Check-in</CardTitle>
+                <CardDescription className={PRIMARY_CARD_DESCRIPTION_CLASSES}>
+                  Say “I'm OK” to check in.
+                </CardDescription>
               </CardHeader>
               <CardContent className="flex flex-1 flex-col items-center justify-center text-center">
                 <VoiceCheckIn onCheckIn={handleCheckIn} />
@@ -1110,15 +1125,15 @@ export default function DashboardPage() {
             </Card>
 
             {/* Status */}
-            <Card className="flex h-full min-h-[20rem] flex-col shadow-lg">
-              <CardHeader className="flex flex-row items-center justify-between">
-                <div>
-                  <CardTitle className="text-3xl font-headline font-semibold">Status</CardTitle>
-                  <CardDescription className="text-lg text-muted-foreground">Your latest activity.</CardDescription>
-                </div>
-                <Timer className="h-8 w-8 text-muted-foreground" />
+            <Card className={PRIMARY_CARD_BASE_CLASSES}>
+              <CardHeader className={`${PRIMARY_CARD_HEADER_CLASSES} items-center`}>
+                <Timer className="mx-auto h-10 w-10 text-muted-foreground" aria-hidden />
+                <CardTitle className={PRIMARY_CARD_TITLE_CLASSES}>Status</CardTitle>
+                <CardDescription className={PRIMARY_CARD_DESCRIPTION_CLASSES}>
+                  Your latest activity.
+                </CardDescription>
               </CardHeader>
-              <CardContent className="flex flex-1 flex-col justify-center gap-3 text-lg">
+              <CardContent className="flex flex-1 flex-col justify-center gap-3 text-lg text-center">
                 <p>
                   Last Check-in:{" "}
                   <span className="font-bold text-primary">{formatWhen(lastCheckIn)}</span>
