@@ -1,4 +1,4 @@
-// app/dashboard/page.tsx
+// src/app/dashboard/page.tsx
 "use client";
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -101,6 +101,33 @@ function describeGeoError(error: unknown) {
   return defaultMessage;
 }
 
+/**
+ * Check the browser's geolocation permission without triggering a prompt.
+ * Returns:
+ *  - true        => granted
+ *  - "prompt"    => will prompt on first getCurrentPosition call
+ *  - false       => denied (tell user to enable in browser/site settings)
+ */
+async function ensureGeoAllowed(): Promise<true | false | "prompt"> {
+  if (typeof window === "undefined") return false;
+  if (!("geolocation" in navigator)) return false;
+
+  // Permissions API may not exist (older Safari, etc.)
+  const navAny = navigator as any;
+  if (!navAny.permissions?.query) return true;
+
+  try {
+    const status: PermissionStatus = await navAny.permissions.query(
+      { name: "geolocation" as PermissionName } // keep types happy across TS lib versions
+    );
+    if (status.state === "granted") return true;
+    if (status.state === "prompt") return "prompt";
+    return false;
+  } catch {
+    // Fail-open: if query throws, just attempt once later
+    return true;
+  }
+}
 export default function DashboardPage() {
   const router = useRouter();
   const { toast } = useToast();
@@ -366,14 +393,31 @@ export default function DashboardPage() {
         return false;
       }
 
+      // ✅ Check browser permission first
+      const perm = await ensureGeoAllowed();
+      if (perm === false) {
+        toast({
+          title: "Location denied in browser",
+          description: "Please enable location access for this site in your browser settings.",
+          variant: "destructive",
+        });
+        return false;
+      }
+
       const last = lastLocationShareRef.current;
-      if (last && last.reason === reason && Date.now() - last.ts < LOCATION_SHARE_COOLDOWN_MS) {
+      const shouldThrottle =
+        reason !== "sos" &&
+        last &&
+        last.reason === reason &&
+        Date.now() - last.ts < LOCATION_SHARE_COOLDOWN_MS;
+      if (shouldThrottle) {
         return true;
       }
 
       setSharingLocation(true);
 
       try {
+        // If perm === "prompt", this will ask once
         const position = await new Promise<GeolocationPosition>((resolve, reject) => {
           navigator.geolocation.getCurrentPosition(resolve, reject, {
             enableHighAccuracy: true,
@@ -442,12 +486,26 @@ export default function DashboardPage() {
     setLocationMutationPending(true);
 
     try {
-      await new Promise<GeolocationPosition>((resolve, reject) => {
-        navigator.geolocation.getCurrentPosition(resolve, reject, {
-          enableHighAccuracy: true,
-          timeout: 15_000,
+      // ✅ Check permission before calling geolocation
+      const perm = await ensureGeoAllowed();
+      if (perm === false) {
+        toast({
+          title: "Location denied in browser",
+          description: "Enable location access for this site in your browser settings.",
+          variant: "destructive",
         });
-      });
+        return;
+      }
+
+      if (perm === "prompt") {
+        // Trigger one-time prompt
+        await new Promise<GeolocationPosition>((resolve, reject) => {
+          navigator.geolocation.getCurrentPosition(resolve, reject, {
+            enableHighAccuracy: true,
+            timeout: 15_000,
+          });
+        });
+      }
 
       await updateDoc(ref, { locationSharing: true });
       setLocationSharing(true);
@@ -554,9 +612,10 @@ export default function DashboardPage() {
     await shareLocation("sos");
   }, [shareLocation, toast]);
 
-  const { bind, holding } = useSosDialer({
-    phoneNumber: "+78473454308", // TODO: make configurable
-    contactName: "Mom",
+  // ⬇️ include progress + ready for UI ring and caption
+  const { bind, holding, progress, ready } = useSosDialer({
+    phoneNumber: "+18473454308", // TODO: make configurable
+    contactName: "911",
     holdToActivateMs: 1500,
     confirm: true,
     onActivate: triggerSos,
@@ -708,17 +767,48 @@ export default function DashboardPage() {
                 </CardDescription>
               </CardHeader>
               <CardContent>
-                <Button
-                  {...bind}
-                  aria-label="Call Mom"
-                  variant="destructive"
-                  size="lg"
-                  className={`h-32 w-32 rounded-full text-2xl shadow-lg transition-transform ${
-                    holding ? "opacity-90" : "hover:scale-105"
-                  }`}
-                >
-                  <Siren className="h-16 w-16" />
-                </Button>
+                <div className="flex flex-col items-center gap-3" aria-live="polite">
+                  {/* Radial progress ring around the button */}
+                  <div
+                    className="relative h-40 w-40 grid place-items-center"
+                    aria-label={
+                      holding
+                        ? ready
+                          ? "Release to call 911"
+                          : `Holding… ${Math.round((progress ?? 0) * 100)} percent`
+                        : "Hold 1.5 seconds to call 911"
+                    }
+                  >
+                    {/* ring */}
+                    <div
+                      className="absolute inset-0 rounded-full"
+                      style={{
+                        background: `conic-gradient(#ef4444 ${(progress || 0) * 360}deg, rgba(239,68,68,0.15) 0deg)`,
+                        WebkitMask:
+                          "radial-gradient(circle 56px at center, transparent 55px, black 56px)",
+                        mask: "radial-gradient(circle 56px at center, transparent 55px, black 56px)",
+                        transition: "background 80ms linear",
+                      }}
+                    />
+                    {/* button */}
+                    <Button
+                      {...bind}
+                      aria-label={ready ? "Release to call 911" : "Hold to call 911"}
+                      variant="destructive"
+                      size="lg"
+                      className={`h-28 w-28 rounded-full text-2xl shadow-lg transition-transform relative z-[1] ${
+                        holding ? "opacity-90" : "hover:scale-105"
+                      }`}
+                    >
+                      <Siren className="h-12 w-12" />
+                    </Button>
+                  </div>
+
+                  {/* Helper caption */}
+                  <p className="text-sm text-destructive/80">
+                    {holding ? (ready ? "Release to call" : "Keep holding…") : "Hold 1 second to call 911"}
+                  </p>
+                </div>
               </CardContent>
             </Card>
 
