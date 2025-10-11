@@ -1112,14 +1112,16 @@ export default function DashboardPage() {
               </CardContent>
             </Card>
 
-            <Card className={`${PRIMARY_CARD_BASE_CLASSES} p-4 text-center`}>
+            <Card
+              className={`${PRIMARY_CARD_BASE_CLASSES} border-2 border-primary/30 text-center`}
+            >
               <CardHeader className={PRIMARY_CARD_HEADER_CLASSES}>
                 <CardTitle className={PRIMARY_CARD_TITLE_CLASSES}>Voice Check-in</CardTitle>
                 <CardDescription className={PRIMARY_CARD_DESCRIPTION_CLASSES}>
-                  Say “I'm OK” to check in.
+                  Check in hands-free with a quick voice command.
                 </CardDescription>
               </CardHeader>
-              <CardContent className="flex flex-1 flex-col items-center justify-center text-center">
+              <CardContent className="flex flex-1 flex-col items-center justify-center gap-6 text-center">
                 <VoiceCheckIn onCheckIn={handleCheckIn} />
               </CardContent>
             </Card>
