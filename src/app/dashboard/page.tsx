@@ -457,12 +457,26 @@ export default function DashboardPage() {
     setLocationSharedAt(null);
   }, []);
 
-  const shareLocation = useCallback(
-    async (reason: LocationShareReason) => {
-      if (locationSharing !== true) return false;
+  type CaptureLocationResult =
+    | { status: "shared"; location: string }
+    | { status: "skipped" }
+    | { status: "throttled" };
 
-      const ref = userRef.current;
-      if (!ref) return false;
+  const captureLocation = useCallback(
+    async (
+      reason: LocationShareReason,
+      options: { silentIfDisabled?: boolean } = {}
+    ): Promise<CaptureLocationResult> => {
+      if (locationSharing === false) {
+        if (!options.silentIfDisabled) {
+          toast({
+            title: "Location sharing disabled",
+            description: "Enable location sharing in settings to send your location during SOS alerts.",
+            variant: "destructive",
+          });
+        }
+        return { status: "skipped" };
+      }
 
       if (typeof window === "undefined" || !("geolocation" in navigator)) {
         toast({
@@ -471,7 +485,7 @@ export default function DashboardPage() {
             "Your device does not support location services. Try another device to share your location.",
           variant: "destructive",
         });
-        return false;
+        return { status: "skipped" };
       }
 
       const perm = await ensureGeoAllowed();
@@ -481,7 +495,7 @@ export default function DashboardPage() {
           description: "Please enable location access for this site in your browser settings.",
           variant: "destructive",
         });
-        return false;
+        return { status: "skipped" };
       }
 
       const last = lastLocationShareRef.current;
@@ -491,13 +505,12 @@ export default function DashboardPage() {
         last.reason === reason &&
         Date.now() - last.ts < LOCATION_SHARE_COOLDOWN_MS;
       if (shouldThrottle) {
-        return true;
+        return { status: "throttled" };
       }
 
       setSharingLocation(true);
 
       try {
-        // If perm === "prompt", this will ask once
         const position = await new Promise<GeolocationPosition>((resolve, reject) => {
           navigator.geolocation.getCurrentPosition(resolve, reject, {
             enableHighAccuracy: true,
@@ -509,8 +522,44 @@ export default function DashboardPage() {
         const { latitude, longitude } = position.coords;
         const locationString = `${latitude.toFixed(6)},${longitude.toFixed(6)}`;
 
+        return { status: "shared", location: locationString };
+      } catch (error) {
+        toast({
+          title: "Location sharing failed",
+          description: describeGeoError(error),
+          variant: "destructive",
+        });
+        return { status: "skipped" };
+      } finally {
+        setSharingLocation(false);
+      }
+    },
+    [locationSharing, toast]
+  );
+
+  const shareLocation = useCallback(
+    async (reason: LocationShareReason, opts?: { silentIfDisabled?: boolean }) => {
+      const ref = userRef.current;
+      if (!ref) {
+        toast({
+          title: "Not signed in",
+          description: "Please log in again to share your location.",
+          variant: "destructive",
+        });
+        return false;
+      }
+
+      const result = await captureLocation(reason, opts);
+      if (result.status === "throttled") {
+        return true;
+      }
+      if (result.status !== "shared") {
+        return false;
+      }
+
+      try {
         await updateDoc(ref, {
-          location: locationString,
+          location: result.location,
           locationShareReason: reason,
           locationSharedAt: serverTimestamp(),
         });
@@ -535,11 +584,9 @@ export default function DashboardPage() {
           variant: "destructive",
         });
         return false;
-      } finally {
-        setSharingLocation(false);
       }
     },
-    [locationSharing, toast]
+    [captureLocation, toast]
   );
 
   const enableLocationSharing = useCallback(async () => {
@@ -676,8 +723,19 @@ export default function DashboardPage() {
       return;
     }
 
+    const locationResult = await captureLocation("sos");
+    const updates: Record<string, any> = { sosTriggeredAt: serverTimestamp() };
+    const shouldPersistLocation = locationResult.status === "shared";
+    if (shouldPersistLocation) {
+      updates.location = locationResult.location;
+      updates.locationShareReason = "sos";
+      updates.locationSharedAt = serverTimestamp();
+    }
+
+    let locationSaved = shouldPersistLocation;
+
     try {
-      await updateDoc(ref, { sosTriggeredAt: serverTimestamp() });
+      await updateDoc(ref, updates);
     } catch (error: any) {
       console.error("Failed to record SOS trigger", error);
       toast({
@@ -685,10 +743,18 @@ export default function DashboardPage() {
         description: error?.message ?? "We couldn't notify your contacts. Please try again.",
         variant: "destructive",
       });
+      locationSaved = false;
     }
 
-    // 1) Share location (best-effort)
-    await shareLocation("sos");
+    if (locationSaved) {
+      lastLocationShareRef.current = { reason: "sos", ts: Date.now() };
+      setLocationShareReason("sos");
+      setLocationSharedAt(new Date());
+      toast({
+        title: "Location shared",
+        description: "We sent your current location with your SOS alert.",
+      });
+    }
 
     // 2) Server-side Telnyx call (does NOT affect scheduled escalation)
     if (primaryEmergencyContactPhone) {
@@ -717,7 +783,7 @@ export default function DashboardPage() {
       });
     }
   }, [
-    shareLocation,
+    captureLocation,
     toast,
     mainUserUid,
     primaryEmergencyContactPhone,
@@ -741,7 +807,7 @@ export default function DashboardPage() {
     const isActive = Boolean(escalationActiveAt);
 
     if (isActive && !wasActive) {
-      void shareLocation("escalation");
+      void shareLocation("escalation", { silentIfDisabled: true });
     } else if (!isActive && wasActive) {
       clearSharedLocation().catch((error) => {
         console.error("Failed to clear shared location after escalation resolved", error);
