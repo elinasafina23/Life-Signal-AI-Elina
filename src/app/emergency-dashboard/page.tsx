@@ -65,6 +65,7 @@ export type MainUserCard = {
   locationShareReason?: "sos" | "escalation" | null;
   locationSharedAt?: Date | null;
   locationSharing?: boolean;
+  phone?: string | null;
   colorClass: string;
 };
 
@@ -81,6 +82,7 @@ export type MainUserDoc = {
   locationSharing?: boolean;
   role?: string;
   dueAtMin?: number; // materialized next deadline (minutes since epoch)
+  phone?: string | null;
 };
 
 // ---------------------- Helpers ----------------------
@@ -119,6 +121,26 @@ function getStatusVariant(status?: string) {
     default:
       return "outline";
   }
+}
+
+function normalizePhoneForLink(phone?: string | null) {
+  if (!phone) return null;
+  const trimmed = String(phone).trim();
+  if (!trimmed) return null;
+  const hasPlus = trimmed.startsWith("+");
+  const digitsOnly = trimmed.replace(/[^\d]/g, "");
+  if (!digitsOnly) return null;
+  return hasPlus ? `+${digitsOnly}` : digitsOnly;
+}
+
+function getTelHref(phone?: string | null) {
+  const normalized = normalizePhoneForLink(phone);
+  return normalized ? `tel:${normalized}` : null;
+}
+
+function getSmsHref(phone?: string | null) {
+  const normalized = normalizePhoneForLink(phone);
+  return normalized ? `sms:${normalized}` : null;
 }
 
 function formatWhen(d?: Date | null) {
@@ -300,6 +322,7 @@ export default function EmergencyDashboardPage() {
                     : undefined;
 
                 const locationString = shareReason ? userData?.location || "" : "";
+                const phoneNumber = normalizePhoneForLink((userData as any)?.phone);
 
                 const updatedCard: MainUserCard = {
                   mainUserUid: mainUserId,
@@ -313,6 +336,7 @@ export default function EmergencyDashboardPage() {
                   locationShareReason: shareReason,
                   locationSharedAt: sharedAt,
                   locationSharing: hasConsent,
+                  phone: phoneNumber,
                 };
 
                 setMainUsers((prev) => {
@@ -406,6 +430,8 @@ export default function EmergencyDashboardPage() {
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
           {mainUsers.map((p) => {
             const map = getMapImage(p.location);
+            const callHref = getTelHref(p.phone);
+            const smsHref = getSmsHref(p.phone);
             return (
               <Card
                 key={p.mainUserUid}
@@ -499,14 +525,32 @@ export default function EmergencyDashboardPage() {
                 </CardContent>
 
                 <CardFooter className="grid grid-cols-2 gap-2">
-                  <Button variant="outline">
-                    <Phone className="mr-2 h-4 w-4" />
-                    Call
-                  </Button>
-                  <Button variant="outline">
-                    <MessageSquare className="mr-2 h-4 w-4" />
-                    Message
-                  </Button>
+                  {callHref ? (
+                    <Button variant="outline" asChild>
+                      <a href={callHref} aria-label={`Call ${p.name}`}>
+                        <Phone className="mr-2 h-4 w-4" />
+                        Call
+                      </a>
+                    </Button>
+                  ) : (
+                    <Button variant="outline" disabled title="Phone number unavailable">
+                      <Phone className="mr-2 h-4 w-4" />
+                      Call
+                    </Button>
+                  )}
+                  {smsHref ? (
+                    <Button variant="outline" asChild>
+                      <a href={smsHref} aria-label={`Message ${p.name}`}>
+                        <MessageSquare className="mr-2 h-4 w-4" />
+                        Message
+                      </a>
+                    </Button>
+                  ) : (
+                    <Button variant="outline" disabled title="Phone number unavailable">
+                      <MessageSquare className="mr-2 h-4 w-4" />
+                      Message
+                    </Button>
+                  )}
                   {p.status === "SOS" && (
                     <Button className="col-span-2" onClick={() => handleAcknowledge(p.name)}>
                       Acknowledge Alert
