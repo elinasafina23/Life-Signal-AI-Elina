@@ -60,7 +60,6 @@ interface UserDoc {
 }
 
 type Status = "safe" | "missed" | "unknown";
-
 type LocationShareReason = "sos" | "escalation";
 
 // helper to compute minutes-since-epoch
@@ -102,32 +101,60 @@ function describeGeoError(error: unknown) {
 }
 
 /**
- * Check the browser's geolocation permission without triggering a prompt.
- * Returns:
- *  - true        => granted
- *  - "prompt"    => will prompt on first getCurrentPosition call
- *  - false       => denied (tell user to enable in browser/site settings)
+ * Check geolocation permission without prompting.
+ * Returns true | "prompt" | false
  */
 async function ensureGeoAllowed(): Promise<true | false | "prompt"> {
   if (typeof window === "undefined") return false;
   if (!("geolocation" in navigator)) return false;
 
-  // Permissions API may not exist (older Safari, etc.)
   const navAny = navigator as any;
   if (!navAny.permissions?.query) return true;
 
   try {
     const status: PermissionStatus = await navAny.permissions.query(
-      { name: "geolocation" as PermissionName } // keep types happy across TS lib versions
+      { name: "geolocation" as PermissionName }
     );
     if (status.state === "granted") return true;
     if (status.state === "prompt") return "prompt";
     return false;
   } catch {
-    // Fail-open: if query throws, just attempt once later
-    return true;
+    return true; // fail-open
   }
 }
+
+/** Call your Cloud Function via the Next proxy. */
+async function triggerServerTelnyxCall(params: {
+  to?: string;                 // optional; omit to let server look up ACTIVE EC
+  mainUserUid?: string;
+  emergencyContactUid?: string;
+}) {
+  // Always use proxy to avoid CORS; your function URL is hidden behind it.
+  const url = "/api/sos/call-server";
+
+  // Forward Firebase ID token if available (in case you verify on CF side)
+  let authHeader: Record<string, string> = {};
+  try {
+    const token = await auth.currentUser?.getIdToken();
+    if (token) authHeader = { Authorization: `Bearer ${token}` };
+  } catch {
+    // non-fatal
+  }
+
+  const res = await fetch(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...authHeader },
+    body: JSON.stringify({ reason: "sos", ...params }),
+    cache: "no-store",
+  });
+
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok || !data?.ok) {
+    throw new Error(data?.error || "Server failed to place Telnyx call");
+  }
+  return data;
+}
+
 export default function DashboardPage() {
   const router = useRouter();
   const { toast } = useToast();
@@ -137,9 +164,7 @@ export default function DashboardPage() {
   const [status, setStatus] = useState<Status>("unknown");
   const [timeLeft, setTimeLeft] = useState<string>("");
   const [locationSharing, setLocationSharing] = useState<boolean | null>(null);
-  const [locationShareReason, setLocationShareReason] = useState<LocationShareReason | null>(
-    null
-  );
+  const [locationShareReason, setLocationShareReason] = useState<LocationShareReason | null>(null);
   const [locationSharedAt, setLocationSharedAt] = useState<Date | null>(null);
   const [escalationActiveAt, setEscalationActiveAt] = useState<Date | null>(null);
   const [locationMutationPending, setLocationMutationPending] = useState(false);
@@ -148,7 +173,7 @@ export default function DashboardPage() {
   const [roleChecked, setRoleChecked] = useState(false);
   const [userDocLoaded, setUserDocLoaded] = useState(false);
 
-  // 👇 renamed to mainUserUid for clarity
+  // 👇 explicit main user UID
   const [mainUserUid, setMainUserUid] = useState<string | null>(null);
 
   const userDocUnsubRef = useRef<(() => void) | null>(null);
@@ -157,7 +182,7 @@ export default function DashboardPage() {
   const lastLocationShareRef = useRef<{ reason: LocationShareReason; ts: number } | null>(null);
   const prevEscalationActiveRef = useRef(false);
 
-  // Handle push notifications while app is open
+  // Push notifications while app is open
   useEffect(() => {
     let unsub: (() => void) | undefined;
 
@@ -201,7 +226,7 @@ export default function DashboardPage() {
 
       if (!user) {
         userRef.current = null;
-        setMainUserUid(null); // reset UID
+        setMainUserUid(null);
         setLastCheckIn(null);
         setIntervalMinutes(12 * 60);
         setStatus("unknown");
@@ -213,7 +238,7 @@ export default function DashboardPage() {
         return;
       }
 
-      setMainUserUid(user.uid); // store main user UID
+      setMainUserUid(user.uid);
       const uref = doc(db, "users", user.uid);
       userRef.current = uref;
       setUserDocLoaded(false);
@@ -291,7 +316,7 @@ export default function DashboardPage() {
     };
   }, [router]);
 
-  // Register device for push under this main user
+  // Register device for push for this main user
   useEffect(() => {
     if (!roleChecked || !mainUserUid) return;
     registerDevice(mainUserUid, "primary");
@@ -393,7 +418,6 @@ export default function DashboardPage() {
         return false;
       }
 
-      // ✅ Check browser permission first
       const perm = await ensureGeoAllowed();
       if (perm === false) {
         toast({
@@ -486,7 +510,6 @@ export default function DashboardPage() {
     setLocationMutationPending(true);
 
     try {
-      // ✅ Check permission before calling geolocation
       const perm = await ensureGeoAllowed();
       if (perm === false) {
         toast({
@@ -498,7 +521,6 @@ export default function DashboardPage() {
       }
 
       if (perm === "prompt") {
-        // Trigger one-time prompt
         await new Promise<GeolocationPosition>((resolve, reject) => {
           navigator.geolocation.getCurrentPosition(resolve, reject, {
             enableHighAccuracy: true,
@@ -609,17 +631,37 @@ export default function DashboardPage() {
       });
     }
 
+    // 1) Share location (best-effort)
     await shareLocation("sos");
-  }, [shareLocation, toast]);
 
-  // ⬇️ include progress + ready for UI ring and caption
-  const { bind, holding, progress, ready } = useSosDialer({
-    phoneNumber: "+18473454308", // TODO: make configurable
+    // 2) Server-side Telnyx call (does NOT affect scheduled escalation)
+    try {
+      await triggerServerTelnyxCall({
+        // Omit "to" so the Cloud Function can pick the ACTIVE EC server-side.
+        // If you want to force a number from client, add: to: "+178473454308",
+        mainUserUid: mainUserUid ?? undefined,
+      });
+    } catch (err: any) {
+      console.error("Server Telnyx call failed", err);
+      toast({
+        title: "Emergency call (server) failed",
+        description: err?.message ?? "We couldn’t start the emergency call from the server.",
+        variant: "destructive",
+      });
+    }
+  }, [shareLocation, toast, mainUserUid]);
+
+  // Hook for hold-to-call (device dialer)
+  const { bind, holding, progress } = useSosDialer({
+    phoneNumber: "+18473454308", // TODO: configurable or primary EC
     contactName: "911",
     holdToActivateMs: 1500,
     confirm: true,
     onActivate: triggerSos,
   });
+
+  // Local "ready" derived from progress (hook returns 0..1)
+  const ready = (progress ?? 0) >= 0.999;
 
   useEffect(() => {
     const wasActive = prevEscalationActiveRef.current;
@@ -806,7 +848,7 @@ export default function DashboardPage() {
 
                   {/* Helper caption */}
                   <p className="text-sm text-destructive/80">
-                    {holding ? (ready ? "Release to call" : "Keep holding…") : "Hold 1 second to call 911"}
+                    {holding ? (ready ? "Release to call" : "Keep holding…") : "Hold 1.5s to call 911"}
                   </p>
                 </div>
               </CardContent>
@@ -914,6 +956,7 @@ export default function DashboardPage() {
               </CardContent>
             </Card>
 
+            {/* Location Sharing */}
             <Card className="shadow-lg">
               <CardHeader>
                 <CardTitle className="text-2xl font-headline">Location Sharing</CardTitle>
@@ -957,9 +1000,7 @@ export default function DashboardPage() {
                     <Button
                       variant="outline"
                       onClick={handleClearSharedLocation}
-                      disabled={
-                        clearingLocation || locationMutationPending || !locationShareReason
-                      }
+                      disabled={clearingLocation || locationMutationPending || !locationShareReason}
                     >
                       {clearingLocation ? "Clearing…" : "Clear last share"}
                     </Button>
