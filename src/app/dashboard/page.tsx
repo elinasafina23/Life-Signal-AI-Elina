@@ -1037,7 +1037,7 @@ export default function DashboardPage() {
                 </CardDescription>
               </CardHeader>
               <CardContent className="flex flex-1 flex-col items-center justify-center gap-4">
-                <div className="flex flex-col items-center gap-3" aria-live="polite">
+                <div className="flex flex-col items-center gap-4" aria-live="polite">
                   {/* Radial progress ring around the button */}
                   <div
                     className="relative h-40 w-40 grid place-items-center"
@@ -1079,7 +1079,7 @@ export default function DashboardPage() {
                   </div>
 
                   {/* Helper caption */}
-                  <p className="text-lg font-medium text-destructive/80">
+                  <p className="text-3xl font-semibold text-destructive/80">
                     {holding
                       ? ready
                         ? `Release to call ${emergencyService.dial}`
@@ -1099,14 +1099,16 @@ export default function DashboardPage() {
                 </CardDescription>
               </CardHeader>
               <CardContent className="flex flex-1 flex-col items-center justify-center gap-6 text-center">
-                <Button
-                  onClick={() => handleCheckIn()}
-                  size="lg"
-                  className="h-32 w-32 rounded-full text-2xl shadow-lg bg-green-500 hover:bg-green-600"
-                >
-                  <CheckCircle2 className="h-16 w-16" />
-                </Button>
-                <p className="text-2xl font-semibold text-muted-foreground">
+                <div className="relative h-40 w-40 grid place-items-center">
+                  <Button
+                    onClick={() => handleCheckIn()}
+                    size="lg"
+                    className="h-28 w-28 rounded-full text-2xl shadow-lg bg-green-500 hover:bg-green-600"
+                  >
+                    <CheckCircle2 className="h-16 w-16" />
+                  </Button>
+                </div>
+                <p className="text-3xl font-semibold text-muted-foreground">
                   Press the button to check in.
                 </p>
               </CardContent>
