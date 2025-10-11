@@ -29,6 +29,20 @@ import {
 import { Input } from "@/components/ui/input";
 import { useToast } from "@/hooks/use-toast";
 import { User, Phone, Mail, Pencil } from "lucide-react";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import {
+  DEFAULT_EMERGENCY_SERVICE_COUNTRY,
+  EMERGENCY_SERVICE_COUNTRY_VALUES,
+  EMERGENCY_SERVICE_OPTIONS,
+  EmergencyServiceCountryCode,
+  getEmergencyService,
+} from "@/constants/emergency-services";
 
 /* ---------------- Invites ---------------- */
 import { inviteEmergencyContact as sendInvite } from "@/lib/inviteEmergencyContact";
@@ -63,6 +77,8 @@ const emergencyContactsSchema = z
     contact1_email:     z.string().email({ message: "Invalid email address." }),
     contact1_phone:     phoneE164Required,
 
+    emergencyServiceCountry: z.enum(EMERGENCY_SERVICE_COUNTRY_VALUES),
+
     // Contact 2 (optional — either fill ALL its fields, or leave all blank)
     contact2_firstName: z.string().optional().or(z.literal("")),
     contact2_lastName:  z.string().optional().or(z.literal("")),
@@ -84,6 +100,7 @@ const initialContacts: EmergencyContactsFormValues = {
   contact1_lastName:  "",
   contact1_email:     "",
   contact1_phone:     "",
+  emergencyServiceCountry: DEFAULT_EMERGENCY_SERVICE_COUNTRY,
   contact2_firstName: "",
   contact2_lastName:  "",
   contact2_email:     "",
@@ -167,6 +184,9 @@ export function EmergencyContacts() {
             contact1_lastName:  saved.contact1_lastName  ?? legacyC1.last  ?? "",
             contact1_email:     saved.contact1_email     ?? "",
             contact1_phone:     saved.contact1_phone     ?? "",
+            emergencyServiceCountry:
+              (saved.emergencyServiceCountry as EmergencyServiceCountryCode) ??
+              DEFAULT_EMERGENCY_SERVICE_COUNTRY,
             contact2_firstName: saved.contact2_firstName ?? legacyC2.first ?? "",
             contact2_lastName:  saved.contact2_lastName  ?? legacyC2.last  ?? "",
             contact2_email:     saved.contact2_email     ?? "",
@@ -205,6 +225,8 @@ export function EmergencyContacts() {
       contact1_email:     data.contact1_email.trim(),
       contact1_phone:     data.contact1_phone.trim(),
     };
+    const emergencyServiceCountry = data.emergencyServiceCountry;
+
     const c2 = {
       contact2_firstName: data.contact2_firstName?.trim() ?? "",
       contact2_lastName:  data.contact2_lastName?.trim() ?? "",
@@ -222,6 +244,7 @@ export function EmergencyContacts() {
           {
             emergencyContacts: {
               ...c1,
+              emergencyServiceCountry,
               contact2_firstName: deleteField(),
               contact2_lastName:  deleteField(),
               contact2_email:     deleteField(),
@@ -232,7 +255,14 @@ export function EmergencyContacts() {
           },
           { merge: true }
         );
-        setContacts({ ...c1, contact2_firstName: "", contact2_lastName: "", contact2_email: "", contact2_phone: "" });
+        setContacts({
+          ...c1,
+          emergencyServiceCountry,
+          contact2_firstName: "",
+          contact2_lastName: "",
+          contact2_email: "",
+          contact2_phone: "",
+        });
       } else {
         await setDoc(
           doc(db, "users", uid),
@@ -240,13 +270,14 @@ export function EmergencyContacts() {
             emergencyContacts: {
               ...c1,
               ...c2,
+              emergencyServiceCountry,
               contact1_name: deleteField(),
               contact2_name: deleteField(),
             },
           },
           { merge: true }
         );
-        setContacts({ ...c1, ...c2 });
+        setContacts({ ...c1, emergencyServiceCountry, ...c2 });
       }
 
       // 2) Send invites only if the email is new/changed.
@@ -321,6 +352,10 @@ export function EmergencyContacts() {
     !!contacts.contact2_email?.trim()     ||
     !!contacts.contact2_phone?.trim();
 
+  const selectedEmergencyService = getEmergencyService(
+    contacts.emergencyServiceCountry
+  );
+
   if (!loaded) {
     return (
       <Card className="shadow-lg">
@@ -356,6 +391,37 @@ export function EmergencyContacts() {
             <Form {...form}>
               <form onSubmit={form.handleSubmit(onSubmit)} className="flex flex-col gap-0">
                 <div className="px-6 pb-6 space-y-4">
+                  <div className="space-y-4 border p-4 rounded-lg">
+                    <FormLabel className="font-bold">Emergency Service</FormLabel>
+                    <FormField
+                      control={form.control}
+                      name="emergencyServiceCountry"
+                      render={({ field }) => (
+                        <FormItem>
+                          <FormLabel>Country</FormLabel>
+                          <Select
+                            value={field.value}
+                            onValueChange={field.onChange}
+                          >
+                            <FormControl>
+                              <SelectTrigger>
+                                <SelectValue placeholder="Select country" />
+                              </SelectTrigger>
+                            </FormControl>
+                            <SelectContent>
+                              {EMERGENCY_SERVICE_OPTIONS.map((option) => (
+                                <SelectItem key={option.code} value={option.code}>
+                                  {option.label} ({option.dial})
+                                </SelectItem>
+                              ))}
+                            </SelectContent>
+                          </Select>
+                          <FormMessage />
+                        </FormItem>
+                      )}
+                    />
+                  </div>
+
                   {/* Contact 1 (required) */}
                   <div className="space-y-4 border p-4 rounded-lg">
                     <FormLabel className="font-bold">Emergency Contact 1</FormLabel>
@@ -462,6 +528,18 @@ export function EmergencyContacts() {
       </CardHeader>
 
       <CardContent className="space-y-6">
+        <div className="flex items-start gap-3 rounded-lg bg-muted/60 p-4">
+          <div className="flex h-10 w-10 items-center justify-center rounded-full bg-destructive/10 text-destructive">
+            <Phone className="h-5 w-5" />
+          </div>
+          <div>
+            <p className="text-sm font-medium">Emergency service</p>
+            <p className="text-sm text-muted-foreground">
+              {selectedEmergencyService.label} — dial {selectedEmergencyService.dial}
+            </p>
+          </div>
+        </div>
+
         {/* Contact 1 */}
         <div className="space-y-2">
           <h4 className="font-semibold">Contact 1</h4>
