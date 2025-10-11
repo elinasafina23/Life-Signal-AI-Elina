@@ -4,13 +4,6 @@
 import { useState, useEffect, useRef } from "react";
 import { Mic, MicOff, Loader, ShieldAlert, ShieldCheck } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
 import type { AssessVoiceCheckInOutput } from "@/ai/flows/voice-check-in-assessment";
 import { useToast } from "@/hooks/use-toast";
 
@@ -229,55 +222,48 @@ export function VoiceCheckIn({ onCheckIn }: VoiceCheckInProps) {
   };
 
   return (
-    <Card className="text-center flex flex-col justify-between h-full">
-      <CardHeader>
-        <CardTitle className="text-3xl font-headline">Voice Check-in</CardTitle>
-        <CardDescription>Press the button and say “I’m OK”.</CardDescription>
-      </CardHeader>
+    <div className="flex h-full w-full flex-col items-center justify-center gap-6 text-center">
+      {/* Visual status circle */}
+      <div className="flex h-32 w-32 items-center justify-center rounded-full bg-secondary shadow-inner">
+        {getStatusIcon()}
+      </div>
 
-      <CardContent className="flex flex-col items-center justify-center space-y-4 flex-grow">
-        {/* Visual status circle */}
-        <div className="w-24 h-24 rounded-full flex items-center justify-center bg-secondary mb-4">
-          {getStatusIcon()}
-        </div>
+      {/* ARIA live region so screen readers announce changes */}
+      <p className="text-2xl font-semibold text-muted-foreground" aria-live="polite">
+        {getStatusText()}
+      </p>
 
-        {/* ARIA live region so screen readers announce changes */}
-        <p className="font-semibold text-lg" aria-live="polite">
-          {getStatusText()}
-        </p>
+      {/* Show transcript once we have one */}
+      {transcript && <p className="text-base text-muted-foreground">You said: “{transcript}”</p>}
 
-        {/* Show transcript once we have one */}
-        {transcript && <p className="text-muted-foreground">You said: “{transcript}”</p>}
-
-        {/* AI explanation (green for OK, red for anomaly) */}
-        {assessment?.explanation && (
-          <p
-            className={`text-sm p-2 rounded-md ${
-              assessment.anomalyDetected ? "bg-destructive/10" : "bg-green-500/10"
-            }`}
-          >
-            <strong>AI Analysis:</strong> {assessment.explanation}
-          </p>
-        )}
-
-        {/* Start/Stop button */}
-        <Button
-          size="lg"
-          onClick={handleToggleListening}
-          disabled={isProcessing || !supported}
-          className="w-48 py-6 text-lg"
+      {/* AI explanation (green for OK, red for anomaly) */}
+      {assessment?.explanation && (
+        <p
+          className={`rounded-md p-3 text-base ${
+            assessment.anomalyDetected ? "bg-destructive/10" : "bg-green-500/10"
+          }`}
         >
-          {isListening ? <MicOff className="mr-2 h-6 w-6" /> : <Mic className="mr-2 h-6 w-6" />}
-          {isListening ? "Stop" : "Start"}
-        </Button>
+          <strong>AI Analysis:</strong> {assessment.explanation}
+        </p>
+      )}
 
-        {/* Tiny hint when unsupported */}
-        {!supported && (
-          <p className="text-xs text-muted-foreground">
-            Tip: Try the latest Chrome/Edge/Safari over HTTPS.
-          </p>
-        )}
-      </CardContent>
-    </Card>
+      {/* Start/Stop button */}
+      <Button
+        size="lg"
+        onClick={handleToggleListening}
+        disabled={isProcessing || !supported}
+        className="w-48 py-6 text-lg font-semibold"
+      >
+        {isListening ? <MicOff className="mr-2 h-6 w-6" /> : <Mic className="mr-2 h-6 w-6" />}
+        {isListening ? "Stop" : "Start"}
+      </Button>
+
+      {/* Tiny hint when unsupported */}
+      {!supported && (
+        <p className="text-sm text-muted-foreground">
+          Tip: Try the latest Chrome/Edge/Safari over HTTPS.
+        </p>
+      )}
+    </div>
   );
 }

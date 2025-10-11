@@ -44,6 +44,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { Separator } from "@/components/ui/separator";
 import { useToast } from "@/hooks/use-toast";
 
 // icons
@@ -92,6 +93,12 @@ const LOCATION_SHARE_COOLDOWN_MS = 60_000;
 const GEO_PERMISSION_DENIED = 1;
 const GEO_POSITION_UNAVAILABLE = 2;
 const GEO_TIMEOUT = 3;
+
+const PRIMARY_CARD_BASE_CLASSES =
+  "flex min-h-[20rem] flex-col shadow-lg transition-shadow hover:shadow-xl";
+const PRIMARY_CARD_HEADER_CLASSES = "space-y-3 text-center";
+const PRIMARY_CARD_TITLE_CLASSES = "text-3xl font-headline font-semibold";
+const PRIMARY_CARD_DESCRIPTION_CLASSES = "text-lg text-muted-foreground";
 
 function describeGeoError(error: unknown) {
   const defaultMessage =
@@ -1012,21 +1019,25 @@ export default function DashboardPage() {
       <Header />
       <main className="flex-grow container mx-auto px-4 py-8">
         <h1 className="text-3xl md:text-4xl font-headline font-bold mb-6">Your Dashboard</h1>
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-          {/* Left column */}
-          <div className="lg:col-span-2 grid grid-cols-1 md:grid-cols-2 gap-6">
+        <div className="grid grid-cols-1 gap-6 lg:grid-cols-2 xl:grid-cols-12">
+          {/* Primary column */}
+          <div className="grid grid-cols-1 gap-6 sm:grid-cols-2 auto-rows-[minmax(20rem,_1fr)] lg:col-span-1 xl:col-span-7">
             {/* SOS */}
-            <Card className="text-center bg-destructive/10 border-destructive shadow-lg hover:shadow-xl transition-shadow">
-              <CardHeader>
-                <CardTitle className="text-3xl font-headline text-destructive">Emergency SOS</CardTitle>
-                <CardDescription className="text-destructive/80">
+            <Card
+              className={`${PRIMARY_CARD_BASE_CLASSES} border border-destructive bg-destructive/10 text-center`}
+            >
+              <CardHeader className={PRIMARY_CARD_HEADER_CLASSES}>
+                <CardTitle className={`${PRIMARY_CARD_TITLE_CLASSES} text-destructive`}>
+                  Emergency SOS
+                </CardTitle>
+                <CardDescription className={`${PRIMARY_CARD_DESCRIPTION_CLASSES} font-medium text-destructive/80`}>
                   Tap only in a real emergency. We will dial {emergencyService.dial} for
                   {" "}
                   {emergencyService.label}.
                 </CardDescription>
               </CardHeader>
-              <CardContent>
-                <div className="flex flex-col items-center gap-3" aria-live="polite">
+              <CardContent className="flex flex-1 flex-col items-center justify-center gap-4">
+                <div className="flex flex-col items-center gap-4" aria-live="polite">
                   {/* Radial progress ring around the button */}
                   <div
                     className="relative h-40 w-40 grid place-items-center"
@@ -1068,7 +1079,7 @@ export default function DashboardPage() {
                   </div>
 
                   {/* Helper caption */}
-                  <p className="text-sm text-destructive/80">
+                  <p className="text-3xl font-semibold text-destructive/80">
                     {holding
                       ? ready
                         ? `Release to call ${emergencyService.dial}`
@@ -1080,67 +1091,62 @@ export default function DashboardPage() {
             </Card>
 
             {/* Manual Check-in */}
-            <Card className="text-center shadow-lg hover:shadow-xl transition-shadow">
-              <CardHeader>
-                <CardTitle className="text-3xl font-headline">Manual Check-in</CardTitle>
-                <CardDescription>Let your emergency contacts know you're safe.</CardDescription>
+            <Card className={`${PRIMARY_CARD_BASE_CLASSES} text-center`}>
+              <CardHeader className={PRIMARY_CARD_HEADER_CLASSES}>
+                <CardTitle className={PRIMARY_CARD_TITLE_CLASSES}>Manual Check-in</CardTitle>
+                <CardDescription className={PRIMARY_CARD_DESCRIPTION_CLASSES}>
+                  Check in manually whenever you need.
+                </CardDescription>
               </CardHeader>
-              <CardContent>
-                <Button
-                  onClick={() => handleCheckIn()}
-                  size="lg"
-                  className="h-32 w-32 rounded-full text-2xl shadow-lg bg-green-500 hover:bg-green-600"
-                >
-                  <CheckCircle2 className="h-16 w-16" />
-                </Button>
+              <CardContent className="flex flex-1 flex-col items-center justify-center gap-6 text-center">
+                <div className="relative h-40 w-40 grid place-items-center">
+                  <Button
+                    onClick={() => handleCheckIn()}
+                    size="lg"
+                    className="h-28 w-28 rounded-full text-2xl shadow-lg bg-green-500 hover:bg-green-600"
+                  >
+                    <CheckCircle2 className="h-16 w-16" />
+                  </Button>
+                </div>
+                <p className="text-3xl font-semibold text-muted-foreground">
+                  Press the button to check in.
+                </p>
               </CardContent>
             </Card>
 
-            {/* Interval */}
-            <Card className="shadow-lg">
-              <CardHeader className="flex flex-row items-center justify-between">
-                <div>
-                  <CardTitle className="text-2xl font-headline">Set Interval</CardTitle>
-                  <CardDescription>Choose your check-in frequency.</CardDescription>
-                </div>
-                <Clock className="h-8 w-8 text-muted-foreground" />
+            <Card
+              className={`${PRIMARY_CARD_BASE_CLASSES} border-2 border-primary/30 text-center`}
+            >
+              <CardHeader className={PRIMARY_CARD_HEADER_CLASSES}>
+                <CardTitle className={PRIMARY_CARD_TITLE_CLASSES}>Voice Check-in</CardTitle>
+                <CardDescription className={PRIMARY_CARD_DESCRIPTION_CLASSES}>
+                  Check in hands-free with a quick voice command.
+                </CardDescription>
               </CardHeader>
-              <CardContent>
-                <Select onValueChange={handleIntervalChange} value={selectedHours}>
-                  <SelectTrigger className="w-full text-lg">
-                    <SelectValue placeholder="Select interval" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {HOURS_OPTIONS.map((h) => (
-                      <SelectItem key={h} value={String(h)}>{`Every ${h} hours`}</SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-                <p className="mt-2 text-sm text-muted-foreground">
-                  Current interval: {Math.floor(intervalMinutes / 60)}h {intervalMinutes % 60}m
-                </p>
+              <CardContent className="flex flex-1 flex-col items-center justify-center gap-6 text-center">
+                <VoiceCheckIn onCheckIn={handleCheckIn} />
               </CardContent>
             </Card>
 
             {/* Status */}
-            <Card className="shadow-lg">
-              <CardHeader className="flex flex-row items-center justify-between">
-                <div>
-                  <CardTitle className="text-2xl font-headline">Status</CardTitle>
-                  <CardDescription>Your latest activity.</CardDescription>
-                </div>
-                <Timer className="h-8 w-8 text-muted-foreground" />
+            <Card className={PRIMARY_CARD_BASE_CLASSES}>
+              <CardHeader className={`${PRIMARY_CARD_HEADER_CLASSES} items-center`}>
+                <Timer className="mx-auto h-10 w-10 text-muted-foreground" aria-hidden />
+                <CardTitle className={PRIMARY_CARD_TITLE_CLASSES}>Status</CardTitle>
+                <CardDescription className={PRIMARY_CARD_DESCRIPTION_CLASSES}>
+                  Your latest activity.
+                </CardDescription>
               </CardHeader>
-              <CardContent className="space-y-2">
-                <p className="text-lg">
+              <CardContent className="flex flex-1 flex-col justify-center gap-3 text-lg text-center">
+                <p>
                   Last Check-in:{" "}
                   <span className="font-bold text-primary">{formatWhen(lastCheckIn)}</span>
                 </p>
-                <p className="text-lg">
+                <p>
                   Next scheduled check-in:{" "}
                   <span className="font-bold text-primary">{formatWhen(nextCheckIn)}</span>
                 </p>
-                <p className="text-lg">
+                <p>
                   Countdown:{" "}
                   <span
                     className={
@@ -1150,7 +1156,7 @@ export default function DashboardPage() {
                     {timeLeft || "—"}
                   </span>
                 </p>
-                <p className="text-lg">
+                <p>
                   Status:{" "}
                   <span
                     className={
@@ -1180,123 +1186,146 @@ export default function DashboardPage() {
                 </p>
               </CardContent>
             </Card>
+          </div>
 
-            {/* Location Sharing */}
-            <Card className="shadow-lg">
-              <CardHeader>
-                <CardTitle className="text-2xl font-headline">Location Sharing</CardTitle>
-                <CardDescription>Share your location only when an alert is active.</CardDescription>
+          {/* Secondary column */}
+          <div className="grid grid-cols-1 gap-6 lg:col-span-1 xl:col-span-4 xl:col-start-9">
+            <EmergencyContacts />
+
+            <Card className="p-4 shadow-lg">
+              <CardHeader className="pb-4">
+                <CardTitle className="text-2xl font-headline">Your Settings</CardTitle>
+                <CardDescription>
+                  Manage how you stay connected with your emergency contacts.
+                </CardDescription>
               </CardHeader>
-              <CardContent className="space-y-4 text-left">
-                <p className="text-sm text-muted-foreground">
-                  We only send your location when you press SOS or when an escalation begins.
-                </p>
-                <div className="flex items-center justify-between text-lg">
-                  <span className="font-semibold">Consent</span>
-                  <span
-                    className={`font-bold ${
-                      locationSharing === true
-                        ? "text-green-600"
-                        : locationSharing === false
-                        ? "text-destructive"
-                        : "text-muted-foreground"
-                    }`}
-                  >
-                    {locationSharing === null ? "—" : locationSharing ? "Enabled" : "Disabled"}
-                  </span>
-                </div>
-                {locationShareReason ? (
-                  <p className="text-sm text-muted-foreground">
-                    Last shared for {locationShareReason === "sos" ? "an SOS alert" : "an escalation"}
-                    {locationSharedAt ? ` (${formatWhen(locationSharedAt)})` : ""}.
-                  </p>
-                ) : (
-                  <p className="text-sm text-muted-foreground">
-                    {locationSharing === true
-                      ? "Your location stays hidden until an SOS alert or escalation occurs."
-                      : "Turn this on to optionally send your location during SOS alerts or escalations."}
-                  </p>
-                )}
-                {locationSharing ? (
+              <CardContent className="space-y-6">
+                <section className="space-y-3">
+                  <div>
+                    <h3 className="text-lg font-semibold">Emergency Callback</h3>
+                    <p className="text-sm text-muted-foreground">
+                      Emergency contacts tap “Call” to reach you at this number.
+                    </p>
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="main-user-phone">Mobile phone</Label>
+                    <Input
+                      id="main-user-phone"
+                      placeholder="+15551234567"
+                      value={phoneDraft}
+                      onChange={(event) => setPhoneDraft(event.target.value)}
+                      disabled={phoneSaving}
+                      inputMode="tel"
+                    />
+                    <p className="text-xs text-muted-foreground">
+                      Include country code. We’ll auto-format for emergency contacts.
+                    </p>
+                  </div>
                   <div className="flex flex-col gap-2 sm:flex-row">
-                    <Button onClick={disableLocationSharing} disabled={locationMutationPending}>
-                      {locationMutationPending ? "Disabling…" : "Disable & Clear"}
+                    <Button
+                      onClick={handlePhoneSave}
+                      disabled={phoneSaving || !phoneDirty}
+                      className="sm:flex-1"
+                    >
+                      {phoneSaving ? "Saving…" : "Save number"}
                     </Button>
                     <Button
                       variant="outline"
-                      onClick={handleClearSharedLocation}
-                      disabled={clearingLocation || locationMutationPending || !locationShareReason}
+                      onClick={handlePhoneReset}
+                      disabled={phoneSaving || !phoneDirty}
                     >
-                      {clearingLocation ? "Clearing…" : "Clear last share"}
+                      Cancel
                     </Button>
                   </div>
-                ) : (
-                  <Button onClick={enableLocationSharing} disabled={locationMutationPending}>
-                    {locationMutationPending ? "Enabling…" : "Enable location sharing"}
-                  </Button>
-                )}
-                {sharingLocation && (
-                  <p className="text-xs text-muted-foreground">Sharing your current location…</p>
-                )}
-              </CardContent>
-            </Card>
+                </section>
 
-            {/* Emergency Contacts */}
-            <div className="md:col-span-2">
-              <EmergencyContacts />
-            </div>
-          </div>
+                <Separator />
 
-          {/* Right column */}
-          <div className="lg:col-span-1 space-y-6">
-            <Card className="p-4 shadow-lg">
-              <CardHeader>
-                <CardTitle className="text-2xl font-headline">Emergency Callback</CardTitle>
-                <CardDescription>
-                  Emergency contacts tap “Call” to reach you at this number.
-                </CardDescription>
-              </CardHeader>
-              <CardContent className="space-y-4">
-                <div className="space-y-2">
-                  <Label htmlFor="main-user-phone">Mobile phone</Label>
-                  <Input
-                    id="main-user-phone"
-                    placeholder="+15551234567"
-                    value={phoneDraft}
-                    onChange={(event) => setPhoneDraft(event.target.value)}
-                    disabled={phoneSaving}
-                    inputMode="tel"
-                  />
-                  <p className="text-xs text-muted-foreground">
-                    Include country code. We’ll auto-format for emergency contacts.
+                <section className="space-y-3">
+                  <div className="flex items-center justify-between gap-4">
+                    <div>
+                      <h3 className="text-lg font-semibold">Set Interval</h3>
+                      <p className="text-sm text-muted-foreground">
+                        Choose your check-in frequency.
+                      </p>
+                    </div>
+                    <Clock className="h-6 w-6 text-muted-foreground" />
+                  </div>
+                  <Select onValueChange={handleIntervalChange} value={selectedHours}>
+                    <SelectTrigger className="w-full text-lg">
+                      <SelectValue placeholder="Select interval" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {HOURS_OPTIONS.map((h) => (
+                        <SelectItem key={h} value={String(h)}>{`Every ${h} hours`}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                  <p className="text-sm text-muted-foreground">
+                    Current interval: {Math.floor(intervalMinutes / 60)}h {intervalMinutes % 60}m
                   </p>
-                </div>
-                <div className="flex flex-col gap-2 sm:flex-row">
-                  <Button
-                    onClick={handlePhoneSave}
-                    disabled={phoneSaving || !phoneDirty}
-                    className="sm:flex-1"
-                  >
-                    {phoneSaving ? "Saving…" : "Save number"}
-                  </Button>
-                  <Button
-                    variant="outline"
-                    onClick={handlePhoneReset}
-                    disabled={phoneSaving || !phoneDirty}
-                  >
-                    Cancel
-                  </Button>
-                </div>
-              </CardContent>
-            </Card>
+                </section>
 
-            <Card className="p-4 shadow-lg">
-              <CardHeader>
-                <CardTitle className="text-2xl font-headline">Voice Check-in</CardTitle>
-                <CardDescription>Say “I'm OK” to check in.</CardDescription>
-              </CardHeader>
-              <CardContent>
-                <VoiceCheckIn onCheckIn={handleCheckIn} />
+                <Separator />
+
+                <section className="space-y-3">
+                  <div>
+                    <h3 className="text-lg font-semibold">Location Sharing</h3>
+                    <p className="text-sm text-muted-foreground">
+                      Share your location only when an alert is active.
+                    </p>
+                  </div>
+                  <p className="text-sm text-muted-foreground">
+                    We only send your location when you press SOS or when an escalation begins.
+                  </p>
+                  <div className="flex items-center justify-between text-lg">
+                    <span className="font-semibold">Consent</span>
+                    <span
+                      className={`font-bold ${
+                        locationSharing === true
+                          ? "text-green-600"
+                          : locationSharing === false
+                          ? "text-destructive"
+                          : "text-muted-foreground"
+                      }`}
+                    >
+                      {locationSharing === null ? "—" : locationSharing ? "Enabled" : "Disabled"}
+                    </span>
+                  </div>
+                  {locationShareReason ? (
+                    <p className="text-sm text-muted-foreground">
+                      Last shared for {locationShareReason === "sos" ? "an SOS alert" : "an escalation"}
+                      {locationSharedAt ? ` (${formatWhen(locationSharedAt)})` : ""}.
+                    </p>
+                  ) : (
+                    <p className="text-sm text-muted-foreground">
+                      {locationSharing === true
+                        ? "Your location stays hidden until an SOS alert or escalation occurs."
+                        : "Turn this on to optionally send your location during SOS alerts or escalations."}
+                    </p>
+                  )}
+                  {locationSharing ? (
+                    <div className="flex flex-col gap-2 sm:flex-row">
+                      <Button onClick={disableLocationSharing} disabled={locationMutationPending}>
+                        {locationMutationPending ? "Disabling…" : "Disable & Clear"}
+                      </Button>
+                      <Button
+                        variant="outline"
+                        onClick={handleClearSharedLocation}
+                        disabled={clearingLocation || locationMutationPending || !locationShareReason}
+                      >
+                        {clearingLocation ? "Clearing…" : "Clear last share"}
+                      </Button>
+                    </div>
+                  ) : (
+                    <Button onClick={enableLocationSharing} disabled={locationMutationPending}>
+                      {locationMutationPending ? "Enabling…" : "Enable location sharing"}
+                    </Button>
+                  )}
+                  {sharingLocation && (
+                    <p className="text-xs text-muted-foreground">Sharing your current location…</p>
+                  )}
+                </section>
               </CardContent>
             </Card>
           </div>
