@@ -1018,9 +1018,9 @@ export default function DashboardPage() {
           <div className="grid grid-cols-1 gap-6 sm:grid-cols-2 auto-rows-[minmax(20rem,_1fr)] lg:col-span-1 xl:col-span-7">
             {/* SOS */}
             <Card className="flex h-full min-h-[20rem] flex-col text-center bg-destructive/10 border-destructive shadow-lg hover:shadow-xl transition-shadow">
-              <CardHeader>
-                <CardTitle className="text-3xl font-headline text-destructive">Emergency SOS</CardTitle>
-                <CardDescription className="text-destructive/80">
+              <CardHeader className="space-y-2">
+                <CardTitle className="text-3xl font-headline font-semibold text-destructive">Emergency SOS</CardTitle>
+                <CardDescription className="text-lg font-medium text-destructive/80">
                   Tap only in a real emergency. We will dial {emergencyService.dial} for
                   {" "}
                   {emergencyService.label}.
@@ -1069,7 +1069,7 @@ export default function DashboardPage() {
                   </div>
 
                   {/* Helper caption */}
-                  <p className="text-sm text-destructive/80">
+                  <p className="text-lg font-medium text-destructive/80">
                     {holding
                       ? ready
                         ? `Release to call ${emergencyService.dial}`
@@ -1082,8 +1082,8 @@ export default function DashboardPage() {
 
             {/* Manual Check-in */}
             <Card className="flex h-full min-h-[20rem] flex-col text-center shadow-lg hover:shadow-xl transition-shadow">
-              <CardHeader>
-                <CardTitle className="text-3xl font-headline">Manual Check-in</CardTitle>
+              <CardHeader className="space-y-2">
+                <CardTitle className="text-3xl font-headline font-semibold">Manual Check-in</CardTitle>
               </CardHeader>
               <CardContent className="flex flex-1 flex-col items-center justify-center gap-6">
                 <Button
@@ -1100,9 +1100,9 @@ export default function DashboardPage() {
             </Card>
 
             <Card className="flex h-full min-h-[20rem] flex-col p-4 shadow-lg">
-              <CardHeader>
-                <CardTitle className="text-2xl font-headline">Voice Check-in</CardTitle>
-                <CardDescription>Say “I'm OK” to check in.</CardDescription>
+              <CardHeader className="space-y-2 text-center">
+                <CardTitle className="text-3xl font-headline font-semibold">Voice Check-in</CardTitle>
+                <CardDescription className="text-lg text-muted-foreground">Say “I'm OK” to check in.</CardDescription>
               </CardHeader>
               <CardContent className="flex flex-1 flex-col items-center justify-center text-center">
                 <VoiceCheckIn onCheckIn={handleCheckIn} />
@@ -1113,8 +1113,8 @@ export default function DashboardPage() {
             <Card className="flex h-full min-h-[20rem] flex-col shadow-lg">
               <CardHeader className="flex flex-row items-center justify-between">
                 <div>
-                  <CardTitle className="text-2xl font-headline">Status</CardTitle>
-                  <CardDescription>Your latest activity.</CardDescription>
+                  <CardTitle className="text-3xl font-headline font-semibold">Status</CardTitle>
+                  <CardDescription className="text-lg text-muted-foreground">Your latest activity.</CardDescription>
                 </div>
                 <Timer className="h-8 w-8 text-muted-foreground" />
               </CardHeader>
