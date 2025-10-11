@@ -1015,9 +1015,9 @@ export default function DashboardPage() {
         <h1 className="text-3xl md:text-4xl font-headline font-bold mb-6">Your Dashboard</h1>
         <div className="grid grid-cols-1 gap-6 lg:grid-cols-2 xl:grid-cols-12">
           {/* Primary column */}
-          <div className="grid grid-cols-1 gap-6 sm:grid-cols-2 auto-rows-[minmax(0,18rem)] lg:col-span-1 xl:col-span-7">
+          <div className="grid grid-cols-1 gap-6 sm:grid-cols-2 auto-rows-[minmax(20rem,_1fr)] lg:col-span-1 xl:col-span-7">
             {/* SOS */}
-            <Card className="flex h-full flex-col text-center bg-destructive/10 border-destructive shadow-lg hover:shadow-xl transition-shadow">
+            <Card className="flex h-full min-h-[20rem] flex-col text-center bg-destructive/10 border-destructive shadow-lg hover:shadow-xl transition-shadow">
               <CardHeader>
                 <CardTitle className="text-3xl font-headline text-destructive">Emergency SOS</CardTitle>
                 <CardDescription className="text-destructive/80">
@@ -1081,7 +1081,7 @@ export default function DashboardPage() {
             </Card>
 
             {/* Manual Check-in */}
-            <Card className="flex h-full flex-col text-center shadow-lg hover:shadow-xl transition-shadow">
+            <Card className="flex h-full min-h-[20rem] flex-col text-center shadow-lg hover:shadow-xl transition-shadow">
               <CardHeader>
                 <CardTitle className="text-3xl font-headline">Manual Check-in</CardTitle>
               </CardHeader>
@@ -1099,18 +1099,18 @@ export default function DashboardPage() {
               </CardContent>
             </Card>
 
-            <Card className="flex h-full flex-col p-4 shadow-lg">
+            <Card className="flex h-full min-h-[20rem] flex-col p-4 shadow-lg">
               <CardHeader>
                 <CardTitle className="text-2xl font-headline">Voice Check-in</CardTitle>
                 <CardDescription>Say “I'm OK” to check in.</CardDescription>
               </CardHeader>
-              <CardContent className="flex flex-1 flex-col justify-center">
+              <CardContent className="flex flex-1 flex-col items-center justify-center text-center">
                 <VoiceCheckIn onCheckIn={handleCheckIn} />
               </CardContent>
             </Card>
 
             {/* Status */}
-            <Card className="flex h-full flex-col shadow-lg">
+            <Card className="flex h-full min-h-[20rem] flex-col shadow-lg">
               <CardHeader className="flex flex-row items-center justify-between">
                 <div>
                   <CardTitle className="text-2xl font-headline">Status</CardTitle>
@@ -1118,16 +1118,16 @@ export default function DashboardPage() {
                 </div>
                 <Timer className="h-8 w-8 text-muted-foreground" />
               </CardHeader>
-              <CardContent className="flex-1 space-y-2">
-                <p className="text-lg">
+              <CardContent className="flex flex-1 flex-col justify-center gap-3 text-lg">
+                <p>
                   Last Check-in:{" "}
                   <span className="font-bold text-primary">{formatWhen(lastCheckIn)}</span>
                 </p>
-                <p className="text-lg">
+                <p>
                   Next scheduled check-in:{" "}
                   <span className="font-bold text-primary">{formatWhen(nextCheckIn)}</span>
                 </p>
-                <p className="text-lg">
+                <p>
                   Countdown:{" "}
                   <span
                     className={
@@ -1137,7 +1137,7 @@ export default function DashboardPage() {
                     {timeLeft || "—"}
                   </span>
                 </p>
-                <p className="text-lg">
+                <p>
                   Status:{" "}
                   <span
                     className={
