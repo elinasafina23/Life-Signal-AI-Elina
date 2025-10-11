@@ -1015,9 +1015,9 @@ export default function DashboardPage() {
         <h1 className="text-3xl md:text-4xl font-headline font-bold mb-6">Your Dashboard</h1>
         <div className="grid grid-cols-1 gap-6 lg:grid-cols-2 xl:grid-cols-12">
           {/* Primary column */}
-          <div className="grid grid-cols-1 gap-6 sm:grid-cols-2 lg:col-span-1 xl:col-span-7">
+          <div className="grid grid-cols-1 gap-6 sm:grid-cols-2 auto-rows-[minmax(0,1fr)] lg:col-span-1 xl:col-span-7">
             {/* SOS */}
-            <Card className="text-center bg-destructive/10 border-destructive shadow-lg hover:shadow-xl transition-shadow sm:col-span-2">
+            <Card className="flex h-full flex-col text-center bg-destructive/10 border-destructive shadow-lg hover:shadow-xl transition-shadow">
               <CardHeader>
                 <CardTitle className="text-3xl font-headline text-destructive">Emergency SOS</CardTitle>
                 <CardDescription className="text-destructive/80">
@@ -1026,7 +1026,7 @@ export default function DashboardPage() {
                   {emergencyService.label}.
                 </CardDescription>
               </CardHeader>
-              <CardContent>
+              <CardContent className="flex flex-1 flex-col justify-center">
                 <div className="flex flex-col items-center gap-3" aria-live="polite">
                   {/* Radial progress ring around the button */}
                   <div
@@ -1081,12 +1081,12 @@ export default function DashboardPage() {
             </Card>
 
             {/* Manual Check-in */}
-            <Card className="text-center shadow-lg hover:shadow-xl transition-shadow">
+            <Card className="flex h-full flex-col text-center shadow-lg hover:shadow-xl transition-shadow">
               <CardHeader>
                 <CardTitle className="text-3xl font-headline">Manual Check-in</CardTitle>
                 <CardDescription>Let your emergency contacts know you're safe.</CardDescription>
               </CardHeader>
-              <CardContent>
+              <CardContent className="flex flex-1 items-center justify-center">
                 <Button
                   onClick={() => handleCheckIn()}
                   size="lg"
@@ -1097,18 +1097,18 @@ export default function DashboardPage() {
               </CardContent>
             </Card>
 
-            <Card className="p-4 shadow-lg sm:col-span-2">
+            <Card className="flex h-full flex-col p-4 shadow-lg">
               <CardHeader>
                 <CardTitle className="text-2xl font-headline">Voice Check-in</CardTitle>
                 <CardDescription>Say “I'm OK” to check in.</CardDescription>
               </CardHeader>
-              <CardContent>
+              <CardContent className="flex flex-1 flex-col justify-center">
                 <VoiceCheckIn onCheckIn={handleCheckIn} />
               </CardContent>
             </Card>
 
             {/* Status */}
-            <Card className="shadow-lg">
+            <Card className="flex h-full flex-col shadow-lg">
               <CardHeader className="flex flex-row items-center justify-between">
                 <div>
                   <CardTitle className="text-2xl font-headline">Status</CardTitle>
@@ -1116,7 +1116,7 @@ export default function DashboardPage() {
                 </div>
                 <Timer className="h-8 w-8 text-muted-foreground" />
               </CardHeader>
-              <CardContent className="space-y-2">
+              <CardContent className="flex-1 space-y-2">
                 <p className="text-lg">
                   Last Check-in:{" "}
                   <span className="font-bold text-primary">{formatWhen(lastCheckIn)}</span>
