@@ -1225,28 +1225,38 @@ export default function DashboardPage() {
               <CardContent className="flex flex-1 flex-col gap-4">
                 <div className="rounded-lg border p-4 text-center">
                   <p className="text-xl font-semibold">{primaryEmergencyContactName}</p>
-                  <p className="text-sm text-muted-foreground">
-                    {primaryEmergencyContactPhone || "Add a phone number to enable calling."}
-                  </p>
+                  {primaryEmergencyContactPhone ? (
+                    <p className="text-sm text-muted-foreground">Phone number on file</p>
+                  ) : (
+                    <p className="text-sm text-muted-foreground">
+                      Add a phone number to enable calling.
+                    </p>
+                  )}
                   <Button
+                    aria-label={`Call ${primaryEmergencyContactName}`}
                     onClick={() => handleDialEmergencyContact(primaryEmergencyContactPhone)}
                     disabled={!primaryEmergencyContactPhone}
                     className="mt-3 w-full sm:w-auto"
                   >
-                    Call Emergency Contact 1
+                    Call
                   </Button>
                 </div>
                 <div className="rounded-lg border p-4 text-center">
                   <p className="text-xl font-semibold">{secondaryEmergencyContactName}</p>
-                  <p className="text-sm text-muted-foreground">
-                    {secondaryEmergencyContactPhone || "Add a phone number to enable calling."}
-                  </p>
+                  {secondaryEmergencyContactPhone ? (
+                    <p className="text-sm text-muted-foreground">Phone number on file</p>
+                  ) : (
+                    <p className="text-sm text-muted-foreground">
+                      Add a phone number to enable calling.
+                    </p>
+                  )}
                   <Button
+                    aria-label={`Call ${secondaryEmergencyContactName}`}
                     onClick={() => handleDialEmergencyContact(secondaryEmergencyContactPhone)}
                     disabled={!secondaryEmergencyContactPhone}
                     className="mt-3 w-full sm:w-auto"
                   >
-                    Call Emergency Contact 2
+                    Call
                   </Button>
                 </div>
               </CardContent>
