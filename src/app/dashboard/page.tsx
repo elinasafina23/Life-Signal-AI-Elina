@@ -1098,7 +1098,7 @@ export default function DashboardPage() {
                   Check in manually whenever you need.
                 </CardDescription>
               </CardHeader>
-              <CardContent className="flex flex-1 flex-col items-center justify-center gap-6 text-center">
+              <CardContent className="flex flex-1 flex-col items-center gap-6 pt-6 text-center">
                 <Button
                   onClick={() => handleCheckIn()}
                   size="lg"
@@ -1116,12 +1116,12 @@ export default function DashboardPage() {
               className={`${PRIMARY_CARD_BASE_CLASSES} border-2 border-primary/30 text-center`}
             >
               <CardHeader className={PRIMARY_CARD_HEADER_CLASSES}>
-                <CardTitle className={PRIMARY_CARD_TITLE_CLASSES}>Voice Check-in</CardTitle>
+                <CardTitle className={PRIMARY_CARD_TITLE_CLASSES}>Voice Message</CardTitle>
                 <CardDescription className={PRIMARY_CARD_DESCRIPTION_CLASSES}>
-                  Check in hands-free with a quick voice command.
+                  Record a short update that we analyze and share with your emergency contacts.
                 </CardDescription>
               </CardHeader>
-              <CardContent className="flex flex-1 flex-col items-center justify-center gap-6 text-center">
+              <CardContent className="flex flex-1 flex-col items-center gap-6 pt-6 text-center">
                 <VoiceCheckIn onCheckIn={handleCheckIn} />
               </CardContent>
             </Card>

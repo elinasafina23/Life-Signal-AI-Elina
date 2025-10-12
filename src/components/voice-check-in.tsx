@@ -7,6 +7,30 @@ import { Button } from "@/components/ui/button";
 import type { AssessVoiceCheckInOutput } from "@/ai/flows/voice-check-in-assessment";
 import { useToast } from "@/hooks/use-toast";
 
+async function notifyEmergencyContacts(
+  currentTranscript: string,
+  aiAssessment: AssessVoiceCheckInOutput,
+) {
+  const response = await fetch("/api/voice-check-in/notify", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      transcribedSpeech: currentTranscript,
+      assessment: aiAssessment,
+    }),
+  });
+
+  const data = await response.json().catch(() => ({}));
+
+  if (!response.ok || (data as any)?.error) {
+    throw new Error((data as any)?.error || "Failed to notify emergency contacts");
+  }
+
+  return data as { ok: boolean; contactCount?: number };
+}
+
 /**
  * VoiceCheckIn
  * - Uses the browser Web Speech API (SpeechRecognition / webkitSpeechRecognition)
@@ -116,10 +140,26 @@ export function VoiceCheckIn({ onCheckIn }: VoiceCheckInProps) {
         const result: AssessVoiceCheckInOutput = await response.json();
         setAssessment(result);
 
-        toast({
-          title: "Check-in Complete",
-          description: "Your voice check-in has been processed.",
-        });
+        try {
+          const notifyResult = await notifyEmergencyContacts(currentTranscript, result);
+          const notifiedCount = notifyResult?.contactCount ?? 0;
+          toast({
+            title: "Voice message sent",
+            description:
+              notifiedCount > 0
+                ? `Shared with ${
+                    notifiedCount === 1 ? "1 emergency contact" : `${notifiedCount} emergency contacts`
+                  }.`
+                : "Saved to your emergency dashboard for quick review.",
+          });
+        } catch (notifyError: any) {
+          console.error("Failed to notify emergency contacts:", notifyError);
+          toast({
+            title: "Voice message not delivered",
+            description: "We saved your analysis but couldn't reach your contacts.",
+            variant: "destructive",
+          });
+        }
 
         if (onCheckIn) {
           try {
