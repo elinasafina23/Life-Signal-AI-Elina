@@ -22,6 +22,7 @@ interface NotifyContactsResponse {
 async function notifyEmergencyContacts(
   currentTranscript: string,
   aiAssessment: AssessVoiceCheckInOutput,
+  audioDataUrl?: string | null,
 ): Promise<NotifyContactsResponse> {
   const response = await fetch("/api/voice-check-in/notify", {
     method: "POST",
@@ -31,6 +32,7 @@ async function notifyEmergencyContacts(
     body: JSON.stringify({
       transcribedSpeech: currentTranscript,
       assessment: aiAssessment,
+      audioDataUrl,
     }),
   });
 
@@ -67,6 +69,150 @@ export function VoiceCheckIn({ onCheckIn }: VoiceCheckInProps) {
   /** We keep the recognition instance in a ref so it persists between renders */
   const recognitionRef = useRef<any | null>(null); // use `any` to avoid TS issues with webkit prefix
   const { toast } = useToast();
+
+  /** Audio recording helpers so we can send the original clip to emergency contacts */
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const mediaStreamRef = useRef<MediaStream | null>(null);
+  const recordedChunksRef = useRef<Blob[]>([]);
+  const audioPromiseRef = useRef<Promise<string | null> | null>(null);
+  const audioResolveRef = useRef<((value: string | null) => void) | null>(null);
+  const lastAudioUrlRef = useRef<string | null>(null);
+
+  async function blobToDataUrl(blob: Blob): Promise<string> {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onloadend = () => resolve(String(reader.result));
+      reader.onerror = () => reject(reader.error);
+      reader.readAsDataURL(blob);
+    });
+  }
+
+  async function startRecording() {
+    if (typeof window === "undefined") return;
+    if (!navigator.mediaDevices?.getUserMedia) {
+      console.warn("MediaDevices API unavailable; voice clip will not be captured.");
+      return;
+    }
+
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      mediaStreamRef.current = stream;
+
+      const preferredTypes = [
+        "audio/webm;codecs=opus",
+        "audio/webm",
+        "audio/ogg;codecs=opus",
+      ];
+      let mimeType: string | undefined;
+      if (typeof MediaRecorder !== "undefined") {
+        mimeType = preferredTypes.find((type) => {
+          try {
+            return MediaRecorder.isTypeSupported(type);
+          } catch {
+            return false;
+          }
+        });
+      }
+
+      const recorder = new MediaRecorder(stream, mimeType ? { mimeType } : undefined);
+      mediaRecorderRef.current = recorder;
+      recordedChunksRef.current = [];
+      audioPromiseRef.current = new Promise<string | null>((resolve) => {
+        audioResolveRef.current = resolve;
+      });
+      lastAudioUrlRef.current = null;
+
+      recorder.ondataavailable = (event: BlobEvent) => {
+        if (event.data && event.data.size > 0) {
+          recordedChunksRef.current.push(event.data);
+        }
+      };
+
+      recorder.onerror = (event) => {
+        console.error("MediaRecorder error:", event);
+        audioResolveRef.current?.(null);
+        audioResolveRef.current = null;
+        audioPromiseRef.current = null;
+      };
+
+      recorder.onstop = async () => {
+        try {
+          const mime = recorder.mimeType || mimeType || "audio/webm";
+          const blob = new Blob(recordedChunksRef.current, { type: mime });
+          recordedChunksRef.current = [];
+
+          if (blob.size > 0) {
+            const dataUrl = await blobToDataUrl(blob);
+            lastAudioUrlRef.current = dataUrl;
+            audioResolveRef.current?.(dataUrl);
+          } else {
+            lastAudioUrlRef.current = null;
+            audioResolveRef.current?.(null);
+          }
+        } catch (error) {
+          console.error("Failed to finalize audio clip:", error);
+          lastAudioUrlRef.current = null;
+          audioResolveRef.current?.(null);
+        } finally {
+          audioResolveRef.current = null;
+          audioPromiseRef.current = null;
+          mediaRecorderRef.current = null;
+
+          if (mediaStreamRef.current) {
+            mediaStreamRef.current.getTracks().forEach((track) => track.stop());
+            mediaStreamRef.current = null;
+          }
+        }
+      };
+
+      recorder.start();
+    } catch (error) {
+      console.error("Unable to start audio recording:", error);
+      audioPromiseRef.current = null;
+      audioResolveRef.current = null;
+      mediaRecorderRef.current = null;
+      if (mediaStreamRef.current) {
+        mediaStreamRef.current.getTracks().forEach((track) => track.stop());
+        mediaStreamRef.current = null;
+      }
+    }
+  }
+
+  function stopRecording(): Promise<string | null> {
+    const recorder = mediaRecorderRef.current;
+    if (!recorder) {
+      return audioPromiseRef.current ?? Promise.resolve(lastAudioUrlRef.current);
+    }
+
+    if (recorder.state === "inactive") {
+      return audioPromiseRef.current ?? Promise.resolve(lastAudioUrlRef.current);
+    }
+
+    const promise =
+      audioPromiseRef.current ||
+      new Promise<string | null>((resolve) => {
+        audioResolveRef.current = resolve;
+      });
+
+    audioPromiseRef.current = promise;
+
+    try {
+      recorder.stop();
+    } catch (error) {
+      console.error("Failed to stop MediaRecorder:", error);
+      audioResolveRef.current?.(lastAudioUrlRef.current ?? null);
+      audioResolveRef.current = null;
+      audioPromiseRef.current = null;
+      mediaRecorderRef.current = null;
+      if (mediaStreamRef.current) {
+        mediaStreamRef.current.getTracks().forEach((track) => track.stop());
+        mediaStreamRef.current = null;
+      }
+      return Promise.resolve(lastAudioUrlRef.current);
+    }
+
+    return promise;
+  }
 
   /**
    * Pull a few most-recent utterances from localStorage.
@@ -122,6 +268,9 @@ export function VoiceCheckIn({ onCheckIn }: VoiceCheckInProps) {
       setIsListening(true);
       setAssessment(null); // clear any old AI result
       setTranscript("");   // clear prior text
+      startRecording().catch((error) => {
+        console.error("Failed to start recording for voice clip:", error);
+      });
     };
 
     // Fired when we receive a transcript (usually one result for short utterances)
@@ -129,6 +278,11 @@ export function VoiceCheckIn({ onCheckIn }: VoiceCheckInProps) {
       const currentTranscript: string = event.results?.[0]?.[0]?.transcript || "";
       setTranscript(currentTranscript);
       pushPreviousMessage(currentTranscript);
+
+      const audioClipPromise = stopRecording().catch((error) => {
+        console.error("Stopping recorder failed:", error);
+        return null;
+      });
 
       setIsProcessing(true);
       try {
@@ -152,8 +306,14 @@ export function VoiceCheckIn({ onCheckIn }: VoiceCheckInProps) {
         const result: AssessVoiceCheckInOutput = await response.json();
         setAssessment(result);
 
+        const audioClip = await audioClipPromise;
+
         try {
-          const notifyResult = await notifyEmergencyContacts(currentTranscript, result);
+          const notifyResult = await notifyEmergencyContacts(
+            currentTranscript,
+            result,
+            audioClip,
+          );
           const notifiedCount = notifyResult?.contactCount ?? 0;
           const pushInfo = notifyResult?.anomalyPush;
 
@@ -211,6 +371,7 @@ export function VoiceCheckIn({ onCheckIn }: VoiceCheckInProps) {
     // Fired when recognition stops (either user stopped or it auto-stopped)
     recognition.onend = () => {
       setIsListening(false);
+      stopRecording().catch(() => null);
     };
 
     // Fired for recognition errors (permissions, network, no-speech, etc.)
@@ -231,6 +392,7 @@ export function VoiceCheckIn({ onCheckIn }: VoiceCheckInProps) {
       toast({ title: "Recognition Error", description: message, variant: "destructive" });
       setIsListening(false);
       setIsProcessing(false);
+      stopRecording().catch(() => null);
     };
 
     // Stash instance for button handlers
@@ -242,6 +404,7 @@ export function VoiceCheckIn({ onCheckIn }: VoiceCheckInProps) {
         recognitionRef.current?.stop?.();
       } catch {}
       recognitionRef.current = null;
+      stopRecording().catch(() => null);
     };
   }, [toast]);
 

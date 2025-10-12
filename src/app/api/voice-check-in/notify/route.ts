@@ -109,6 +109,19 @@ export async function POST(req: NextRequest) {
 
     const transcriptRaw = body?.transcribedSpeech;
     const assessment = body?.assessment as AssessVoiceCheckInOutput | undefined;
+    const audioDataUrlRaw = typeof body?.audioDataUrl === "string" ? body.audioDataUrl.trim() : "";
+
+    let audioDataUrl: string | null = null;
+    if (audioDataUrlRaw) {
+      if (/^data:audio\//i.test(audioDataUrlRaw)) {
+        audioDataUrl = audioDataUrlRaw;
+      } else {
+        return NextResponse.json(
+          { error: "audioDataUrl must be a base64-encoded data URL" },
+          { status: 400 },
+        );
+      }
+    }
 
     const transcript = typeof transcriptRaw === "string" ? transcriptRaw.trim() : "";
     if (!transcript) {
@@ -147,12 +160,17 @@ export async function POST(req: NextRequest) {
       .collection("voiceMessages")
       .doc();
 
-    batch.set(voiceMessageRef, {
+    const voicePayload: Record<string, any> = {
       transcript,
       explanation,
       anomalyDetected,
       createdAt: FieldValue.serverTimestamp(),
-    });
+    };
+    if (audioDataUrl) {
+      voicePayload.audioDataUrl = audioDataUrl;
+    }
+
+    batch.set(voiceMessageRef, voicePayload);
 
     batch.set(
       userRef,
@@ -162,6 +180,7 @@ export async function POST(req: NextRequest) {
           explanation,
           anomalyDetected,
           createdAt: FieldValue.serverTimestamp(),
+          ...(audioDataUrl ? { audioDataUrl } : {}),
         },
         updatedAt: FieldValue.serverTimestamp(),
       },
@@ -177,6 +196,7 @@ export async function POST(req: NextRequest) {
             explanation,
             anomalyDetected,
             createdAt: FieldValue.serverTimestamp(),
+            ...(audioDataUrl ? { audioDataUrl } : {}),
           },
           updatedAt: FieldValue.serverTimestamp(),
         },
