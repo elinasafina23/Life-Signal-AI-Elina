@@ -35,7 +35,14 @@ import {
 } from "@/components/ui/card";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
-import { MapPin, Phone, MessageSquare, Settings as SettingsIcon } from "lucide-react";
+import {
+  MapPin,
+  Phone,
+  MessageSquare,
+  Settings as SettingsIcon,
+  ShieldAlert,
+  ShieldCheck,
+} from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 
 // Centered popup dialog
@@ -68,6 +75,12 @@ export type MainUserCard = {
   locationSharing?: boolean;
   colorClass: string;
   phone?: string | null;
+  latestVoiceMessage?: {
+    transcript: string;
+    explanation: string;
+    anomalyDetected: boolean;
+    createdAt: Date | null;
+  } | null;
 };
 
 export type MainUserDoc = {
@@ -84,6 +97,12 @@ export type MainUserDoc = {
   role?: string;
   dueAtMin?: number; // materialized next deadline (minutes since epoch)
   phone?: string;
+  latestVoiceMessage?: {
+    transcript?: string;
+    explanation?: string;
+    anomalyDetected?: boolean;
+    createdAt?: Timestamp;
+  };
 };
 
 // ---------------------- Helpers ----------------------
@@ -306,6 +325,29 @@ export default function EmergencyDashboardPage() {
 
                 const sanitizedPhone = sanitizePhone((userData as any)?.phone);
 
+                const rawVoice = (userData as any)?.latestVoiceMessage;
+                let latestVoiceMessage = rawVoice
+                  ? {
+                      transcript:
+                        typeof rawVoice?.transcript === "string" ? rawVoice.transcript : "",
+                      explanation:
+                        typeof rawVoice?.explanation === "string" ? rawVoice.explanation : "",
+                      anomalyDetected: Boolean(rawVoice?.anomalyDetected),
+                      createdAt:
+                        rawVoice?.createdAt instanceof Timestamp
+                          ? rawVoice.createdAt.toDate()
+                          : null,
+                    }
+                  : null;
+
+                if (
+                  latestVoiceMessage &&
+                  !latestVoiceMessage.transcript &&
+                  !latestVoiceMessage.explanation
+                ) {
+                  latestVoiceMessage = null;
+                }
+
                 const updatedCard: MainUserCard = {
                   mainUserUid: mainUserId,
                   name: displayName || name,
@@ -319,6 +361,7 @@ export default function EmergencyDashboardPage() {
                   locationSharedAt: sharedAt,
                   locationSharing: hasConsent,
                   phone: sanitizedPhone || null,
+                  latestVoiceMessage,
                 };
 
                 setMainUsers((prev) => {
@@ -479,6 +522,42 @@ export default function EmergencyDashboardPage() {
                       ? `Call button dials ${p.phone}.`
                       : "They haven't added a phone number yet."}
                   </p>
+
+                  {p.latestVoiceMessage && (
+                    <div
+                      className={`space-y-2 rounded-md border p-3 ${
+                        p.latestVoiceMessage.anomalyDetected
+                          ? "border-destructive/40 bg-destructive/10"
+                          : "border-green-500/40 bg-green-500/10"
+                      }`}
+                    >
+                      <div className="flex items-start justify-between gap-4">
+                        <div className="flex items-center gap-2 text-sm font-semibold">
+                          {p.latestVoiceMessage.anomalyDetected ? (
+                            <ShieldAlert className="h-4 w-4 text-destructive" aria-hidden />
+                          ) : (
+                            <ShieldCheck className="h-4 w-4 text-green-600" aria-hidden />
+                          )}
+                          <span>Latest voice update</span>
+                        </div>
+                        {p.latestVoiceMessage.createdAt && (
+                          <span className="text-xs text-muted-foreground whitespace-nowrap">
+                            {formatWhen(p.latestVoiceMessage.createdAt)}
+                          </span>
+                        )}
+                      </div>
+                      {p.latestVoiceMessage.transcript && (
+                        <p className="text-sm italic text-muted-foreground">
+                          “{p.latestVoiceMessage.transcript}”
+                        </p>
+                      )}
+                      {p.latestVoiceMessage.explanation && (
+                        <p className="text-sm leading-relaxed">
+                          {p.latestVoiceMessage.explanation}
+                        </p>
+                      )}
+                    </div>
+                  )}
 
                   <div className="relative h-40 w-full rounded-lg overflow-hidden border">
                     <Image
