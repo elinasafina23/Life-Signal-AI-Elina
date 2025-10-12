@@ -22,11 +22,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import {
-  Collapsible,
-  CollapsibleTrigger,
-  CollapsibleContent,
-} from "@/components/ui/collapsible";
+import { Collapsible, CollapsibleTrigger } from "@/components/ui/collapsible";
 
 interface AskAiAssistantResponse {
   answer: string;
@@ -434,13 +430,6 @@ export function AskAiAssistant() {
                 />
               </Button>
             </CollapsibleTrigger>
-            <CollapsibleContent className="pt-3">
-              {answer ? (
-                <p className="text-sm text-muted-foreground">
-                  Tap the button again to close the preview window.
-                </p>
-              ) : null}
-            </CollapsibleContent>
           </Collapsible>
         </CardContent>
       </Card>
