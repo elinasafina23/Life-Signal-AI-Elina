@@ -1055,7 +1055,7 @@ export default function DashboardPage() {
           <div className="grid grid-cols-1 gap-6 sm:grid-cols-2 auto-rows-[minmax(20rem,_1fr)] lg:col-span-1 xl:col-span-7">
             {/* SOS */}
             <Card
-              className={`${PRIMARY_CARD_BASE_CLASSES} border border-destructive bg-destructive/10 text-center`}
+              className={`${PRIMARY_CARD_BASE_CLASSES} aspect-square min-h-0 border border-destructive bg-destructive/10 text-center`}
             >
               <CardHeader className={PRIMARY_CARD_HEADER_CLASSES}>
                 <CardTitle className={`${PRIMARY_CARD_TITLE_CLASSES} text-destructive`}>
@@ -1122,14 +1122,14 @@ export default function DashboardPage() {
             </Card>
 
             {/* Check-in */}
-            <Card className={`${PRIMARY_CARD_BASE_CLASSES} text-center`}>
+            <Card className={`${PRIMARY_CARD_BASE_CLASSES} aspect-square min-h-0 text-center`}>
               <CardHeader className={PRIMARY_CARD_HEADER_CLASSES}>
                 <CardTitle className={PRIMARY_CARD_TITLE_CLASSES}>Check-in</CardTitle>
                 <CardDescription className={PRIMARY_CARD_DESCRIPTION_CLASSES}>
                   Let your contacts know you’re safe.
                 </CardDescription>
               </CardHeader>
-              <CardContent className="flex flex-1 flex-col items-center gap-6 pt-6 text-center">
+              <CardContent className="flex flex-1 flex-col items-center justify-center gap-8 text-center">
                 <div className="flex flex-col items-center gap-4">
                   <Button
                     onClick={() => handleCheckIn()}
@@ -1142,7 +1142,7 @@ export default function DashboardPage() {
                     Press the button to check in.
                   </p>
                 </div>
-                <div className="w-full space-y-3 text-lg text-center">
+                <div className="w-full max-w-sm space-y-2 text-left text-base">
                   <p>
                     Last Check-in:{" "}
                     <span className="font-bold text-primary">{formatWhen(lastCheckIn)}</span>
@@ -1200,7 +1200,7 @@ export default function DashboardPage() {
             </Card>
 
             <Card
-              className={`${PRIMARY_CARD_BASE_CLASSES} border-2 border-primary/30 text-center`}
+              className={`${PRIMARY_CARD_BASE_CLASSES} aspect-square min-h-0 border-2 border-primary/30 text-center`}
             >
               <CardHeader className={PRIMARY_CARD_HEADER_CLASSES}>
                 <CardTitle className={PRIMARY_CARD_TITLE_CLASSES}>Voice Message</CardTitle>
@@ -1208,7 +1208,7 @@ export default function DashboardPage() {
                   Record a short update that we analyze and share with your emergency contacts.
                 </CardDescription>
               </CardHeader>
-              <CardContent className="flex flex-1 flex-col items-center gap-6 pt-6 text-center">
+              <CardContent className="flex flex-1 flex-col items-center justify-center gap-6 text-center">
                 <VoiceCheckIn onCheckIn={handleCheckIn} />
               </CardContent>
             </Card>
