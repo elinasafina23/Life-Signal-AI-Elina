@@ -7,6 +7,13 @@ import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { Card, CardContent } from "@/components/ui/card";
 import { useToast } from "@/hooks/use-toast";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 
 interface AskAiAssistantResponse {
   answer: string;
@@ -29,13 +36,53 @@ export function AskAiAssistant() {
   const [isSpeaking, setIsSpeaking] = useState(false);
   const [speechInputSupported, setSpeechInputSupported] = useState(false);
   const [isListening, setIsListening] = useState(false);
+  const [preferredVoice, setPreferredVoice] = useState<SpeechSynthesisVoice | null>(null);
+  const [answerDialogOpen, setAnswerDialogOpen] = useState(false);
+  const [lastAskedQuestion, setLastAskedQuestion] = useState<string | null>(null);
 
   const utteranceRef = useRef<SpeechSynthesisUtterance | null>(null);
   const recognitionRef = useRef<any | null>(null);
 
   useEffect(() => {
+    let speechCleanup: (() => void) | undefined;
+
     if (typeof window !== "undefined" && "speechSynthesis" in window) {
       setSpeechSupported(true);
+
+      const synth = window.speechSynthesis;
+      const resolveVoice = () => {
+        const voices = synth.getVoices();
+        if (!voices?.length) return;
+
+        const normalized = voices.map((voice) => ({
+          voice,
+          name: voice.name.toLowerCase(),
+        }));
+
+        const preferred =
+          normalized.find(({ name }) => name.includes("google") && name.includes("english"))?.
+            voice ||
+          normalized.find(({ name }) => name.includes("neural"))?.voice ||
+          voices.find((voice) => voice.lang?.toLowerCase().startsWith("en")) ||
+          voices[0] ||
+          null;
+
+        setPreferredVoice(preferred ?? null);
+      };
+
+      resolveVoice();
+
+      if (typeof synth.addEventListener === "function") {
+        synth.addEventListener("voiceschanged", resolveVoice);
+        speechCleanup = () => synth.removeEventListener("voiceschanged", resolveVoice);
+      } else if (typeof synth.onvoiceschanged !== "undefined") {
+        synth.onvoiceschanged = resolveVoice;
+        speechCleanup = () => {
+          if (typeof synth.onvoiceschanged !== "undefined") {
+            synth.onvoiceschanged = null;
+          }
+        };
+      }
     }
 
     if (typeof window !== "undefined") {
@@ -47,6 +94,9 @@ export function AskAiAssistant() {
     }
 
     return () => {
+      if (speechCleanup) {
+        speechCleanup();
+      }
       if (typeof window !== "undefined" && "speechSynthesis" in window) {
         window.speechSynthesis.cancel();
       }
@@ -68,8 +118,13 @@ export function AskAiAssistant() {
     synth.cancel();
 
     const utterance = new SpeechSynthesisUtterance(text);
-    utterance.rate = 1;
-    utterance.pitch = 1;
+    if (preferredVoice) {
+      utterance.voice = preferredVoice;
+    }
+
+    utterance.rate = preferredVoice ? 0.96 : 0.94;
+    utterance.pitch = preferredVoice ? 1.04 : 1.02;
+    utterance.volume = 0.95;
     utterance.onend = () => {
       setIsSpeaking(false);
       utteranceRef.current = null;
@@ -82,7 +137,7 @@ export function AskAiAssistant() {
     utteranceRef.current = utterance;
     setIsSpeaking(true);
     synth.speak(utterance);
-  }, [speechSupported]);
+  }, [preferredVoice, speechSupported]);
 
   const stopSpeaking = useCallback(() => {
     if (!speechSupported || typeof window === "undefined") return;
@@ -106,6 +161,7 @@ export function AskAiAssistant() {
       setError(null);
       setAnswer(null);
       setMood(null);
+      setAnswerDialogOpen(false);
       stopSpeaking();
 
       try {
@@ -126,6 +182,7 @@ export function AskAiAssistant() {
         }
 
         setAnswer(data.answer);
+        setLastAskedQuestion(trimmed);
         if (data.moodSummary) {
           setMood({
             mood: data.moodSummary.mood,
@@ -136,6 +193,7 @@ export function AskAiAssistant() {
         if (data.answer && speechSupported) {
           speak(data.answer);
         }
+        setAnswerDialogOpen(true);
       } catch (err) {
         console.error("AskAiAssistant failed:", err);
         const message =
@@ -313,13 +371,55 @@ export function AskAiAssistant() {
 
       {error && <p className="text-sm text-destructive">{error}</p>}
 
-      {answer && (
-        <Card className="border-primary/40 bg-primary/5">
-          <CardContent className="space-y-4 p-5 text-left">
-            <div>
-              <p className="text-sm font-semibold uppercase tracking-wide text-primary">Assistant</p>
-              <p className="mt-2 text-lg leading-relaxed text-muted-foreground">{answer}</p>
-            </div>
+      <Card className="border-dashed border-primary/40 bg-primary/5">
+        <CardContent className="space-y-3 p-5 text-left">
+          <p className="text-sm font-semibold uppercase tracking-wide text-primary">Assistant</p>
+          <p className="text-sm text-muted-foreground">
+            {answer
+              ? "Your latest guidance is ready in the pop-out window."
+              : "After you ask a question, the assistant will open a pop-out window with the response."}
+          </p>
+          {answer && (
+            <Button
+              type="button"
+              variant="secondary"
+              onClick={() => setAnswerDialogOpen(true)}
+            >
+              View response
+            </Button>
+          )}
+        </CardContent>
+      </Card>
+
+      <Dialog
+        open={answerDialogOpen}
+        onOpenChange={(open) => {
+          setAnswerDialogOpen(open);
+          if (!open) {
+            stopSpeaking();
+          } else if (answer && speechSupported && !isSpeaking) {
+            speak(answer);
+          }
+        }}
+      >
+        <DialogContent className="sm:max-w-xl">
+          <DialogHeader>
+            <DialogTitle>Assistant response</DialogTitle>
+            <DialogDescription>
+              {lastAskedQuestion
+                ? `Question: ${lastAskedQuestion}`
+                : "Here is the latest guidance from the assistant."}
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="space-y-4 text-left">
+            {answer ? (
+              <p className="text-lg leading-relaxed text-muted-foreground">{answer}</p>
+            ) : (
+              <p className="text-sm text-muted-foreground">
+                Ask a question to receive guidance from the assistant.
+              </p>
+            )}
 
             {mood && (
               <div className="rounded-md border border-primary/20 bg-primary/10 p-4">
@@ -330,9 +430,9 @@ export function AskAiAssistant() {
                 )}
               </div>
             )}
-          </CardContent>
-        </Card>
-      )}
+          </div>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
