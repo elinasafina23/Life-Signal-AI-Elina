@@ -1,7 +1,15 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Sparkles, Volume2, VolumeX, Loader2, Mic, MicOff } from "lucide-react";
+import {
+  Sparkles,
+  Volume2,
+  VolumeX,
+  Loader2,
+  Mic,
+  MicOff,
+  ChevronDown,
+} from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
@@ -14,6 +22,11 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import {
+  Collapsible,
+  CollapsibleTrigger,
+  CollapsibleContent,
+} from "@/components/ui/collapsible";
 
 interface AskAiAssistantResponse {
   answer: string;
@@ -193,7 +206,6 @@ export function AskAiAssistant() {
         if (data.answer && speechSupported) {
           speak(data.answer);
         }
-        setAnswerDialogOpen(true);
       } catch (err) {
         console.error("AskAiAssistant failed:", err);
         const message =
@@ -306,12 +318,12 @@ export function AskAiAssistant() {
         />
       </div>
 
-      <div className="flex flex-wrap items-center gap-3">
+      <div className="grid w-full gap-3 sm:grid-cols-[minmax(0,1fr)_auto_auto] sm:items-stretch">
         <Button
           onClick={() => submitQuestion()}
           disabled={!canSubmit}
           size="lg"
-          className="flex-1 sm:flex-initial"
+          className="w-full"
         >
           {loading ? (
             <>
@@ -326,12 +338,20 @@ export function AskAiAssistant() {
           )}
         </Button>
 
-        {speechSupported && answer && (
+        <div className="flex w-full justify-stretch">
           <Button
             type="button"
             variant="outline"
-            onClick={() => (isSpeaking ? stopSpeaking() : speak(answer))}
-            disabled={loading}
+            onClick={() =>
+              answer && speechSupported
+                ? isSpeaking
+                  ? stopSpeaking()
+                  : speak(answer)
+                : undefined
+            }
+            disabled={loading || !speechSupported || !answer}
+            className={`w-full ${!speechSupported || !answer ? "invisible" : ""}`}
+            aria-hidden={!speechSupported || !answer}
           >
             {isSpeaking ? (
               <>
@@ -345,28 +365,33 @@ export function AskAiAssistant() {
               </>
             )}
           </Button>
-        )}
+        </div>
 
-        {speechInputSupported && (
-          <Button
-            type="button"
-            variant={isListening ? "destructive" : "outline"}
-            onClick={isListening ? stopVoiceCapture : handleVoiceAsk}
-            disabled={loading}
-          >
-            {isListening ? (
-              <>
-                <MicOff className="mr-2 h-5 w-5" aria-hidden />
-                Stop listening
-              </>
-            ) : (
-              <>
-                <Mic className="mr-2 h-5 w-5" aria-hidden />
-                Voice ask
-              </>
-            )}
-          </Button>
-        )}
+        <div className="flex w-full justify-stretch">
+          {speechInputSupported ? (
+            <Button
+              type="button"
+              variant={isListening ? "destructive" : "outline"}
+              onClick={isListening ? stopVoiceCapture : handleVoiceAsk}
+              disabled={loading}
+              className="w-full"
+            >
+              {isListening ? (
+                <>
+                  <MicOff className="mr-2 h-5 w-5" aria-hidden />
+                  Stop listening
+                </>
+              ) : (
+                <>
+                  <Mic className="mr-2 h-5 w-5" aria-hidden />
+                  Voice ask
+                </>
+              )}
+            </Button>
+          ) : (
+            <span className="hidden sm:block" aria-hidden />
+          )}
+        </div>
       </div>
 
       {error && <p className="text-sm text-destructive">{error}</p>}
@@ -376,18 +401,47 @@ export function AskAiAssistant() {
           <p className="text-sm font-semibold uppercase tracking-wide text-primary">Assistant</p>
           <p className="text-sm text-muted-foreground">
             {answer
-              ? "Your latest guidance is ready in the pop-out window."
-              : "After you ask a question, the assistant will open a pop-out window with the response."}
+              ? "Your latest guidance is ready. Tap below to open it in a pop-out window."
+              : "After you ask a question, tap below to preview the assistant's response."}
           </p>
-          {answer && (
-            <Button
-              type="button"
-              variant="secondary"
-              onClick={() => setAnswerDialogOpen(true)}
-            >
-              View response
-            </Button>
-          )}
+          <Collapsible
+            open={answerDialogOpen}
+            onOpenChange={(open) => {
+              if (open && !answer) return;
+              setAnswerDialogOpen(open);
+              if (!open) {
+                stopSpeaking();
+              }
+            }}
+          >
+            <CollapsibleTrigger asChild>
+              <Button
+                type="button"
+                variant="secondary"
+                className="flex w-full items-center justify-between gap-3 text-left"
+                disabled={!answer}
+              >
+                <span className="line-clamp-2 text-sm font-medium leading-snug">
+                  {answer
+                    ? answer
+                    : "Ask a question and your response preview will appear here."}
+                </span>
+                <ChevronDown
+                  className={`h-4 w-4 flex-shrink-0 transition-transform ${
+                    answerDialogOpen ? "rotate-180" : ""
+                  }`}
+                  aria-hidden
+                />
+              </Button>
+            </CollapsibleTrigger>
+            <CollapsibleContent className="pt-3">
+              {answer ? (
+                <p className="text-sm text-muted-foreground">
+                  Tap the button again to close the preview window.
+                </p>
+              ) : null}
+            </CollapsibleContent>
+          </Collapsible>
         </CardContent>
       </Card>
 
