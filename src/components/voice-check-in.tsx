@@ -7,6 +7,42 @@ import { Button } from "@/components/ui/button";
 import type { AssessVoiceCheckInOutput } from "@/ai/flows/voice-check-in-assessment";
 import { useToast } from "@/hooks/use-toast";
 
+interface NotifyContactsResponse {
+  ok: boolean;
+  contactCount?: number;
+  anomalyPush?: {
+    attempted: boolean;
+    contactUidCount?: number;
+    tokenCount?: number;
+    successCount?: number;
+    failureCount?: number;
+  };
+}
+
+async function notifyEmergencyContacts(
+  currentTranscript: string,
+  aiAssessment: AssessVoiceCheckInOutput,
+): Promise<NotifyContactsResponse> {
+  const response = await fetch("/api/voice-check-in/notify", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      transcribedSpeech: currentTranscript,
+      assessment: aiAssessment,
+    }),
+  });
+
+  const data = await response.json().catch(() => ({}));
+
+  if (!response.ok || (data as any)?.error) {
+    throw new Error((data as any)?.error || "Failed to notify emergency contacts");
+  }
+
+  return data as NotifyContactsResponse;
+}
+
 /**
  * VoiceCheckIn
  * - Uses the browser Web Speech API (SpeechRecognition / webkitSpeechRecognition)
@@ -116,10 +152,42 @@ export function VoiceCheckIn({ onCheckIn }: VoiceCheckInProps) {
         const result: AssessVoiceCheckInOutput = await response.json();
         setAssessment(result);
 
-        toast({
-          title: "Check-in Complete",
-          description: "Your voice check-in has been processed.",
-        });
+        try {
+          const notifyResult = await notifyEmergencyContacts(currentTranscript, result);
+          const notifiedCount = notifyResult?.contactCount ?? 0;
+          const pushInfo = notifyResult?.anomalyPush;
+
+          let description =
+            notifiedCount > 0
+              ? `Shared with ${
+                  notifiedCount === 1 ? "1 emergency contact" : `${notifiedCount} emergency contacts`
+                }.`
+              : "Saved to your emergency dashboard for quick review.";
+
+          if (result.anomalyDetected && pushInfo?.attempted) {
+            const success = pushInfo.successCount ?? 0;
+            const tokens = pushInfo.tokenCount ?? 0;
+            if (success > 0) {
+              description += " Emergency contacts received a push alert about the anomaly.";
+            } else if (tokens > 0) {
+              description += " We attempted push alerts, but delivery failed. Check contact device registrations.";
+            } else {
+              description += " None of your emergency contacts have push notifications enabled yet.";
+            }
+          }
+
+          toast({
+            title: "Voice message sent",
+            description,
+          });
+        } catch (notifyError: any) {
+          console.error("Failed to notify emergency contacts:", notifyError);
+          toast({
+            title: "Voice message not delivered",
+            description: "We saved your analysis but couldn't reach your contacts.",
+            variant: "destructive",
+          });
+        }
 
         if (onCheckIn) {
           try {
