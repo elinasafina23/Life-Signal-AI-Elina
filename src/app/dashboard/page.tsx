@@ -1353,7 +1353,7 @@ export default function DashboardPage() {
                       <p className="text-sm text-muted-foreground break-words">
                         {primaryEmergencyContactPhone || "Add a phone number to enable calling."}
                       </p>
-                      <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-2">
+                      <div className="mt-3 flex flex-col gap-2">
                         <Button
                           onClick={() => handleDialEmergencyContact(primaryEmergencyContactPhone)}
                           disabled={!primaryEmergencyContactPhone}
@@ -1378,7 +1378,7 @@ export default function DashboardPage() {
                       <p className="text-sm text-muted-foreground break-words">
                         {secondaryEmergencyContactPhone || "Add a phone number to enable calling."}
                       </p>
-                      <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-2">
+                      <div className="mt-3 flex flex-col gap-2">
                         <Button
                           onClick={() => handleDialEmergencyContact(secondaryEmergencyContactPhone)}
                           disabled={!secondaryEmergencyContactPhone}
