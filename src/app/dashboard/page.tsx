@@ -104,7 +104,7 @@ const GEO_POSITION_UNAVAILABLE = 2;
 const GEO_TIMEOUT = 3;
 
 const PRIMARY_CARD_BASE_CLASSES =
-  "flex min-h-[20rem] flex-col shadow-lg transition-shadow hover:shadow-xl";
+  "flex aspect-square flex-col shadow-lg transition-shadow hover:shadow-xl";
 const PRIMARY_CARD_HEADER_CLASSES = "space-y-3 text-center";
 const PRIMARY_CARD_TITLE_CLASSES = "text-3xl font-headline font-semibold";
 const PRIMARY_CARD_DESCRIPTION_CLASSES = "text-lg text-muted-foreground";
@@ -1133,10 +1133,10 @@ export default function DashboardPage() {
         <h1 className="text-3xl md:text-4xl font-headline font-bold mb-6">Your Dashboard</h1>
         <div className="grid grid-cols-1 gap-6 lg:grid-cols-2 xl:grid-cols-12">
           {/* Primary column */}
-          <div className="grid grid-cols-1 gap-6 sm:grid-cols-2 auto-rows-[minmax(22rem,_1fr)] lg:col-span-1 xl:col-span-7">
+          <div className="grid grid-cols-1 gap-6 sm:grid-cols-2 lg:col-span-1 xl:col-span-7">
             {/* SOS */}
             <Card
-              className={`${PRIMARY_CARD_BASE_CLASSES} min-h-[22rem] border border-destructive bg-destructive/10 text-center`}
+              className={`${PRIMARY_CARD_BASE_CLASSES} border border-destructive bg-destructive/10 text-center`}
             >
               <CardHeader className={PRIMARY_CARD_HEADER_CLASSES}>
                 <CardTitle className={`${PRIMARY_CARD_TITLE_CLASSES} text-destructive`}>
@@ -1203,7 +1203,7 @@ export default function DashboardPage() {
             </Card>
 
             {/* Check-in */}
-            <Card className={`${PRIMARY_CARD_BASE_CLASSES} min-h-[24rem] text-center`}>
+            <Card className={`${PRIMARY_CARD_BASE_CLASSES} text-center`}>
               <CardHeader className={PRIMARY_CARD_HEADER_CLASSES}>
                 <CardTitle className={PRIMARY_CARD_TITLE_CLASSES}>Check-in</CardTitle>
                 <CardDescription className={PRIMARY_CARD_DESCRIPTION_CLASSES}>
@@ -1223,7 +1223,19 @@ export default function DashboardPage() {
                     Press the button to check in.
                   </p>
                 </div>
-                <div className="w-full max-w-sm space-y-2 text-left text-base">
+              </CardContent>
+            </Card>
+
+            {/* Check-in status */}
+            <Card className={`${PRIMARY_CARD_BASE_CLASSES} text-center`}>
+              <CardHeader className={PRIMARY_CARD_HEADER_CLASSES}>
+                <CardTitle className={PRIMARY_CARD_TITLE_CLASSES}>Check-in status</CardTitle>
+                <CardDescription className={PRIMARY_CARD_DESCRIPTION_CLASSES}>
+                  Track your latest updates and sharing preferences.
+                </CardDescription>
+              </CardHeader>
+              <CardContent className="flex flex-1 flex-col items-center justify-center text-left">
+                <div className="w-full max-w-sm space-y-2 text-base">
                   <p>
                     Last Check-in:{" "}
                     <span className="font-bold text-primary">{formatWhen(lastCheckIn)}</span>
@@ -1280,9 +1292,7 @@ export default function DashboardPage() {
               </CardContent>
             </Card>
 
-            <Card
-              className={`${PRIMARY_CARD_BASE_CLASSES} min-h-[26rem] border-2 border-primary/30 text-center`}
-            >
+            <Card className={`${PRIMARY_CARD_BASE_CLASSES} border-2 border-primary/30 text-center`}>
               <CardHeader className={PRIMARY_CARD_HEADER_CLASSES}>
                 <CardTitle className={PRIMARY_CARD_TITLE_CLASSES}>Ask AI</CardTitle>
                 <CardDescription className={PRIMARY_CARD_DESCRIPTION_CLASSES}>
@@ -1313,11 +1323,11 @@ export default function DashboardPage() {
                     <p className="text-sm text-muted-foreground">
                       {primaryEmergencyContactEmail || "Add an email to enable voice messages."}
                     </p>
-                    <div className="mt-3 flex flex-col gap-2 sm:flex-row">
+                    <div className="mt-3 flex flex-col gap-2">
                       <Button
                         onClick={() => handleDialEmergencyContact(primaryEmergencyContactPhone)}
                         disabled={!primaryEmergencyContactPhone}
-                        className="w-full sm:flex-1"
+                        className="w-full"
                       >
                         Call
                       </Button>
@@ -1326,7 +1336,7 @@ export default function DashboardPage() {
                         variant="secondary"
                         onClick={() => handleOpenVoiceMessageDialog(primaryVoiceContact)}
                         disabled={!primaryVoiceContact}
-                        className="w-full sm:flex-1"
+                        className="w-full"
                       >
                         <Mic className="mr-2 h-4 w-4" aria-hidden />
                         Voice message
@@ -1341,11 +1351,11 @@ export default function DashboardPage() {
                     <p className="text-sm text-muted-foreground">
                       {secondaryEmergencyContactEmail || "Add an email to enable voice messages."}
                     </p>
-                    <div className="mt-3 flex flex-col gap-2 sm:flex-row">
+                    <div className="mt-3 flex flex-col gap-2">
                       <Button
                         onClick={() => handleDialEmergencyContact(secondaryEmergencyContactPhone)}
                         disabled={!secondaryEmergencyContactPhone}
-                        className="w-full sm:flex-1"
+                        className="w-full"
                       >
                         Call
                       </Button>
@@ -1354,7 +1364,7 @@ export default function DashboardPage() {
                         variant="secondary"
                         onClick={() => handleOpenVoiceMessageDialog(secondaryVoiceContact)}
                         disabled={!secondaryVoiceContact}
-                        className="w-full sm:flex-1"
+                        className="w-full"
                       >
                         <Mic className="mr-2 h-4 w-4" aria-hidden />
                         Voice message
@@ -1363,19 +1373,18 @@ export default function DashboardPage() {
                   </div>
                 </div>
 
-                <Separator className="mx-auto w-24" />
+              </CardContent>
+            </Card>
 
-                <div className="flex flex-col items-center gap-4 text-center">
-                  <h3 className="text-2xl font-semibold">Send a voice update</h3>
-                  <p className="max-w-lg text-base text-muted-foreground">
-                    {voiceContactOptions.length
-                      ? voiceContactOptions.length === 1
-                        ? "Record a quick message that we analyze and share with your emergency contact."
-                        : "Record one update and we'll analyze it before sharing with both emergency contacts. Use the voice message buttons above if you'd prefer to message someone individually."
-                      : "Add emergency contact emails to send a voice update directly to each person."}
-                  </p>
-                  <VoiceCheckIn contacts={voiceContactOptions} onCheckIn={handleCheckIn} />
-                </div>
+            <Card className={`${PRIMARY_CARD_BASE_CLASSES} text-center`}>
+              <CardHeader className={PRIMARY_CARD_HEADER_CLASSES}>
+                <CardTitle className={PRIMARY_CARD_TITLE_CLASSES}>Voice Check-in</CardTitle>
+                <CardDescription className={PRIMARY_CARD_DESCRIPTION_CLASSES}>
+                  Record one update we’ll analyze and share with your contacts.
+                </CardDescription>
+              </CardHeader>
+              <CardContent className="flex flex-1 flex-col items-center justify-center">
+                <VoiceCheckIn contacts={voiceContactOptions} onCheckIn={handleCheckIn} />
               </CardContent>
             </Card>
           </div>
