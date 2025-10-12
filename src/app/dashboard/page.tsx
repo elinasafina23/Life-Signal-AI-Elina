@@ -48,7 +48,7 @@ import { Separator } from "@/components/ui/separator";
 import { useToast } from "@/hooks/use-toast";
 
 // icons
-import { Siren, CheckCircle2, Timer, Clock } from "lucide-react";
+import { Siren, CheckCircle2, PhoneCall, Clock } from "lucide-react";
 
 // roles
 import { normalizeRole } from "@/lib/roles";
@@ -206,7 +206,11 @@ export default function DashboardPage() {
   const [primaryEmergencyContactPhone, setPrimaryEmergencyContactPhone] =
     useState<string | null>(null);
   const [primaryEmergencyContactName, setPrimaryEmergencyContactName] =
-    useState<string>("Emergency Contact");
+    useState<string>("Emergency Contact 1");
+  const [secondaryEmergencyContactPhone, setSecondaryEmergencyContactPhone] =
+    useState<string | null>(null);
+  const [secondaryEmergencyContactName, setSecondaryEmergencyContactName] =
+    useState<string>("Emergency Contact 2");
   const [savedPhone, setSavedPhone] = useState<string>("");
   const [phoneDraft, setPhoneDraft] = useState<string>("");
   const [phoneSaving, setPhoneSaving] = useState(false);
@@ -363,17 +367,38 @@ export default function DashboardPage() {
               ? contacts.contact1_lastName.trim()
               : "";
           const displayName = [first, last].filter(Boolean).join(" ");
-          setPrimaryEmergencyContactName(displayName || "Emergency Contact");
+          setPrimaryEmergencyContactName(displayName || "Emergency Contact 1");
 
           const phone =
             typeof contacts.contact1_phone === "string"
               ? sanitizePhone(contacts.contact1_phone)
               : "";
           setPrimaryEmergencyContactPhone(phone || null);
+
+          const secondFirst =
+            typeof contacts.contact2_firstName === "string"
+              ? contacts.contact2_firstName.trim()
+              : "";
+          const secondLast =
+            typeof contacts.contact2_lastName === "string"
+              ? contacts.contact2_lastName.trim()
+              : "";
+          const secondDisplayName = [secondFirst, secondLast].filter(Boolean).join(" ");
+          setSecondaryEmergencyContactName(
+            secondDisplayName || "Emergency Contact 2"
+          );
+
+          const secondPhone =
+            typeof contacts.contact2_phone === "string"
+              ? sanitizePhone(contacts.contact2_phone)
+              : "";
+          setSecondaryEmergencyContactPhone(secondPhone || null);
         } else {
           setEmergencyServiceCountry(DEFAULT_EMERGENCY_SERVICE_COUNTRY);
-          setPrimaryEmergencyContactName("Emergency Contact");
+          setPrimaryEmergencyContactName("Emergency Contact 1");
           setPrimaryEmergencyContactPhone(null);
+          setSecondaryEmergencyContactName("Emergency Contact 2");
+          setSecondaryEmergencyContactPhone(null);
         }
 
         setUserDocLoaded(true);
@@ -407,6 +432,12 @@ export default function DashboardPage() {
     () => getEmergencyService(emergencyServiceCountry),
     [emergencyServiceCountry]
   );
+
+  const handleDialEmergencyContact = useCallback((phone: string | null) => {
+    if (!phone) return;
+    if (typeof window === "undefined") return;
+    window.location.href = `tel:${phone}`;
+  }, []);
 
   // Countdown + status updater
   useEffect(() => {
@@ -1090,25 +1121,81 @@ export default function DashboardPage() {
               </CardContent>
             </Card>
 
-            {/* Manual Check-in */}
+            {/* Check-in */}
             <Card className={`${PRIMARY_CARD_BASE_CLASSES} text-center`}>
               <CardHeader className={PRIMARY_CARD_HEADER_CLASSES}>
-                <CardTitle className={PRIMARY_CARD_TITLE_CLASSES}>Manual Check-in</CardTitle>
+                <CardTitle className={PRIMARY_CARD_TITLE_CLASSES}>Check-in</CardTitle>
                 <CardDescription className={PRIMARY_CARD_DESCRIPTION_CLASSES}>
-                  Check in manually whenever you need.
+                  Let your contacts know you’re safe.
                 </CardDescription>
               </CardHeader>
               <CardContent className="flex flex-1 flex-col items-center gap-6 pt-6 text-center">
-                <Button
-                  onClick={() => handleCheckIn()}
-                  size="lg"
-                  className="h-32 w-32 rounded-full text-2xl shadow-lg bg-green-500 hover:bg-green-600"
-                >
-                  <CheckCircle2 className="h-16 w-16" />
-                </Button>
-                <p className="text-2xl font-semibold text-muted-foreground">
-                  Press the button to check in.
-                </p>
+                <div className="flex flex-col items-center gap-4">
+                  <Button
+                    onClick={() => handleCheckIn()}
+                    size="lg"
+                    className="h-32 w-32 rounded-full text-2xl shadow-lg bg-green-500 hover:bg-green-600"
+                  >
+                    <CheckCircle2 className="h-16 w-16" />
+                  </Button>
+                  <p className="text-2xl font-semibold text-muted-foreground">
+                    Press the button to check in.
+                  </p>
+                </div>
+                <div className="w-full space-y-3 text-lg text-center">
+                  <p>
+                    Last Check-in:{" "}
+                    <span className="font-bold text-primary">{formatWhen(lastCheckIn)}</span>
+                  </p>
+                  <p>
+                    Next scheduled check-in:{" "}
+                    <span className="font-bold text-primary">{formatWhen(nextCheckIn)}</span>
+                  </p>
+                  <p>
+                    Countdown:{" "}
+                    <span
+                      className={
+                        status === "missed"
+                          ? "font-bold text-destructive"
+                          : "font-bold text-primary"
+                      }
+                    >
+                      {timeLeft || "—"}
+                    </span>
+                  </p>
+                  <p>
+                    Status:{" "}
+                    <span
+                      className={
+                        status === "safe"
+                          ? "font-bold text-green-600"
+                          : status === "missed"
+                          ? "font-bold text-destructive"
+                          : "font-bold text-muted-foreground"
+                      }
+                    >
+                      {status.toUpperCase()}
+                    </span>
+                  </p>
+                  <p className="text-lg">
+                    Location Sharing:{" "}
+                    <span
+                      className={
+                        locationSharing === true
+                          ? "font-bold text-green-600"
+                          : locationSharing === false
+                          ? "font-bold text-destructive"
+                          : "font-bold text-muted-foreground"
+                      }
+                    >
+                      {locationSharing === null
+                        ? "—"
+                        : locationSharing
+                        ? "Enabled"
+                        : "Disabled"}
+                    </span>
+                  </p>
+                </div>
               </CardContent>
             </Card>
 
@@ -1126,62 +1213,42 @@ export default function DashboardPage() {
               </CardContent>
             </Card>
 
-            {/* Status */}
+            {/* Emergency contact quick calls */}
             <Card className={PRIMARY_CARD_BASE_CLASSES}>
               <CardHeader className={`${PRIMARY_CARD_HEADER_CLASSES} items-center`}>
-                <Timer className="mx-auto h-10 w-10 text-muted-foreground" aria-hidden />
-                <CardTitle className={PRIMARY_CARD_TITLE_CLASSES}>Status</CardTitle>
+                <PhoneCall className="mx-auto h-10 w-10 text-muted-foreground" aria-hidden />
+                <CardTitle className={PRIMARY_CARD_TITLE_CLASSES}>Emergency Contacts</CardTitle>
                 <CardDescription className={PRIMARY_CARD_DESCRIPTION_CLASSES}>
-                  Your latest activity.
+                  Call your emergency contacts instantly.
                 </CardDescription>
               </CardHeader>
-              <CardContent className="flex flex-1 flex-col justify-center gap-3 text-lg text-center">
-                <p>
-                  Last Check-in:{" "}
-                  <span className="font-bold text-primary">{formatWhen(lastCheckIn)}</span>
-                </p>
-                <p>
-                  Next scheduled check-in:{" "}
-                  <span className="font-bold text-primary">{formatWhen(nextCheckIn)}</span>
-                </p>
-                <p>
-                  Countdown:{" "}
-                  <span
-                    className={
-                      status === "missed" ? "font-bold text-destructive" : "font-bold text-primary"
-                    }
+              <CardContent className="flex flex-1 flex-col gap-4">
+                <div className="rounded-lg border p-4 text-center">
+                  <p className="text-xl font-semibold">{primaryEmergencyContactName}</p>
+                  <p className="text-sm text-muted-foreground">
+                    {primaryEmergencyContactPhone || "Add a phone number to enable calling."}
+                  </p>
+                  <Button
+                    onClick={() => handleDialEmergencyContact(primaryEmergencyContactPhone)}
+                    disabled={!primaryEmergencyContactPhone}
+                    className="mt-3 w-full sm:w-auto"
                   >
-                    {timeLeft || "—"}
-                  </span>
-                </p>
-                <p>
-                  Status:{" "}
-                  <span
-                    className={
-                      status === "safe"
-                        ? "font-bold text-green-600"
-                        : status === "missed"
-                        ? "font-bold text-destructive"
-                        : "font-bold text-muted-foreground"
-                    }
+                    Call Emergency Contact 1
+                  </Button>
+                </div>
+                <div className="rounded-lg border p-4 text-center">
+                  <p className="text-xl font-semibold">{secondaryEmergencyContactName}</p>
+                  <p className="text-sm text-muted-foreground">
+                    {secondaryEmergencyContactPhone || "Add a phone number to enable calling."}
+                  </p>
+                  <Button
+                    onClick={() => handleDialEmergencyContact(secondaryEmergencyContactPhone)}
+                    disabled={!secondaryEmergencyContactPhone}
+                    className="mt-3 w-full sm:w-auto"
                   >
-                    {status.toUpperCase()}
-                  </span>
-                </p>
-                <p className="text-lg">
-                  Location Sharing:{" "}
-                  <span
-                    className={
-                      locationSharing === true
-                        ? "font-bold text-green-600"
-                        : locationSharing === false
-                        ? "font-bold text-destructive"
-                        : "font-bold text-muted-foreground"
-                    }
-                  >
-                    {locationSharing === null ? "—" : locationSharing ? "Enabled" : "Disabled"}
-                  </span>
-                </p>
+                    Call Emergency Contact 2
+                  </Button>
+                </div>
               </CardContent>
             </Card>
           </div>

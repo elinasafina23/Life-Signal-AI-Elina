@@ -110,6 +110,7 @@ export async function POST(req: NextRequest) {
     const transcriptRaw = body?.transcribedSpeech;
     const assessment = body?.assessment as AssessVoiceCheckInOutput | undefined;
     const audioDataUrlRaw = typeof body?.audioDataUrl === "string" ? body.audioDataUrl.trim() : "";
+    const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000);
 
     let audioDataUrl: string | null = null;
     if (audioDataUrlRaw) {
@@ -158,30 +159,23 @@ export async function POST(req: NextRequest) {
       .collection("users")
       .doc(mainUserUid)
       .collection("voiceMessages")
-      .doc();
+      .doc("latest");
 
-    const voicePayload: Record<string, any> = {
+    const sharedVoicePayload = {
       transcript,
       explanation,
       anomalyDetected,
       createdAt: FieldValue.serverTimestamp(),
+      expiresAt,
+      audioDataUrl: audioDataUrl ?? null,
     };
-    if (audioDataUrl) {
-      voicePayload.audioDataUrl = audioDataUrl;
-    }
 
-    batch.set(voiceMessageRef, voicePayload);
+    batch.set(voiceMessageRef, sharedVoicePayload);
 
     batch.set(
       userRef,
       {
-        latestVoiceMessage: {
-          transcript,
-          explanation,
-          anomalyDetected,
-          createdAt: FieldValue.serverTimestamp(),
-          ...(audioDataUrl ? { audioDataUrl } : {}),
-        },
+        latestVoiceMessage: sharedVoicePayload,
         updatedAt: FieldValue.serverTimestamp(),
       },
       { merge: true }
@@ -191,13 +185,7 @@ export async function POST(req: NextRequest) {
       batch.set(
         docSnap.ref,
         {
-          lastVoiceMessage: {
-            transcript,
-            explanation,
-            anomalyDetected,
-            createdAt: FieldValue.serverTimestamp(),
-            ...(audioDataUrl ? { audioDataUrl } : {}),
-          },
+          lastVoiceMessage: sharedVoicePayload,
           updatedAt: FieldValue.serverTimestamp(),
         },
         { merge: true }
