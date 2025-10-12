@@ -1146,14 +1146,14 @@ export default function DashboardPage() {
               </CardContent>
             </Card>
 
-            <Card className={`${PRIMARY_CARD_BASE_CLASSES} min-h-0 sm:col-span-2`}>
-              <CardHeader className="space-y-2 text-left">
+            <Card className={`${PRIMARY_CARD_BASE_CLASSES} aspect-square min-h-0 text-left`}>
+              <CardHeader className="space-y-2">
                 <CardTitle className="text-2xl font-headline">Status Overview</CardTitle>
                 <CardDescription className="text-base">
                   Keep tabs on your latest check-in and countdown.
                 </CardDescription>
               </CardHeader>
-              <CardContent>
+              <CardContent className="flex flex-1 flex-col justify-center">
                 <dl className="grid gap-4 text-base sm:grid-cols-2">
                   <div className="space-y-1">
                     <dt className="text-sm text-muted-foreground">Last check-in</dt>
