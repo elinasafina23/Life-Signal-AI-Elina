@@ -52,6 +52,28 @@ function buildDisplayName(data: any | undefined | null): string {
   return fallback;
 }
 
+function normalizeEmailValue(value: unknown): string {
+  return typeof value === "string" ? value.trim().toLowerCase() : "";
+}
+
+function normalizePhoneValue(value: unknown): string {
+  if (typeof value !== "string") return "";
+  const trimmed = value.trim();
+  if (!trimmed) return "";
+
+  let normalized = trimmed.replace(/[^\d+]/g, "");
+  if (normalized.startsWith("+")) {
+    return `+${normalized.slice(1).replace(/\+/g, "")}`;
+  }
+
+  normalized = normalized.replace(/\+/g, "");
+  if (normalized.startsWith("00") && normalized.length > 2) {
+    return `+${normalized.slice(2)}`;
+  }
+
+  return normalized;
+}
+
 async function getFcmTokensForUser(uid: string): Promise<string[]> {
   try {
     const snap = await db.collection(`users/${uid}/devices`).get();
@@ -112,6 +134,14 @@ export async function POST(req: NextRequest) {
     const audioDataUrlRaw = typeof body?.audioDataUrl === "string" ? body.audioDataUrl.trim() : "";
     const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000);
 
+    const targetContactRaw =
+      body && typeof body.targetContact === "object" && body.targetContact !== null
+        ? (body.targetContact as Record<string, unknown>)
+        : null;
+    const targetEmail = normalizeEmailValue(targetContactRaw?.email);
+    const targetPhone = normalizePhoneValue(targetContactRaw?.phone);
+    const hasTargetFilter = Boolean(targetEmail || targetPhone);
+
     let audioDataUrl: string | null = null;
     if (audioDataUrlRaw) {
       if (/^data:audio\//i.test(audioDataUrlRaw)) {
@@ -150,6 +180,30 @@ export async function POST(req: NextRequest) {
       userRef.get().catch(() => null),
     ]);
 
+    const contactDocs = hasTargetFilter
+      ? contactsSnap.docs.filter((docSnap) => {
+          const data = docSnap.data() as any;
+          const primaryEmail = normalizeEmailValue(data?.email);
+          const legacyEmail = normalizeEmailValue(data?.emergencyContactEmail);
+          const fallbackEmail = normalizeEmailValue(data?.contactEmail);
+          const docPhone = normalizePhoneValue(data?.phone);
+
+          const emailMatches =
+            targetEmail &&
+            (primaryEmail === targetEmail || legacyEmail === targetEmail || fallbackEmail === targetEmail);
+          const phoneMatches = targetPhone && docPhone === targetPhone;
+
+          return (targetEmail ? emailMatches : false) || (targetPhone ? phoneMatches : false);
+        })
+      : contactsSnap.docs;
+
+    if (hasTargetFilter && contactDocs.length === 0) {
+      return NextResponse.json(
+        { error: "Target emergency contact not found" },
+        { status: 404 },
+      );
+    }
+
     const userData = userSnap?.exists ? (userSnap.data() as any) : null;
     const mainUserName = buildDisplayName(userData);
 
@@ -181,7 +235,7 @@ export async function POST(req: NextRequest) {
       { merge: true }
     );
 
-    contactsSnap.forEach((docSnap) => {
+    contactDocs.forEach((docSnap) => {
       batch.set(
         docSnap.ref,
         {
@@ -206,7 +260,7 @@ export async function POST(req: NextRequest) {
       pushSummary.attempted = true;
 
       const contactUids = new Set<string>();
-      contactsSnap.forEach((docSnap) => {
+      contactDocs.forEach((docSnap) => {
         const data = docSnap.data() as any;
         const contactUid = typeof data?.emergencyContactUid === "string" ? data.emergencyContactUid.trim() : "";
         if (contactUid) {
@@ -241,7 +295,7 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    return NextResponse.json({ ok: true, contactCount: contactsSnap.size, anomalyPush: pushSummary });
+    return NextResponse.json({ ok: true, contactCount: contactDocs.length, anomalyPush: pushSummary });
   } catch (error: any) {
     if (error?.message === "UNAUTHENTICATED") {
       return NextResponse.json({ error: "Unauthenticated" }, { status: 401 });

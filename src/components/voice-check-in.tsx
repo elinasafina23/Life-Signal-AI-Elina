@@ -19,10 +19,16 @@ interface NotifyContactsResponse {
   };
 }
 
+interface VoiceContactTargetPayload {
+  email?: string | null;
+  phone?: string | null;
+}
+
 async function notifyEmergencyContacts(
   currentTranscript: string,
   aiAssessment: AssessVoiceCheckInOutput,
   audioDataUrl?: string | null,
+  targetContact?: VoiceContactTargetPayload | null,
 ): Promise<NotifyContactsResponse> {
   const response = await fetch("/api/voice-check-in/notify", {
     method: "POST",
@@ -33,6 +39,7 @@ async function notifyEmergencyContacts(
       transcribedSpeech: currentTranscript,
       assessment: aiAssessment,
       audioDataUrl,
+      targetContact,
     }),
   });
 
@@ -54,9 +61,15 @@ async function notifyEmergencyContacts(
  */
 export interface VoiceCheckInProps {
   onCheckIn?: () => void | Promise<void>;
+  targetContact?: {
+    name?: string | null;
+    email?: string | null;
+    phone?: string | null;
+  } | null;
+  onClearTarget?: () => void;
 }
 
-export function VoiceCheckIn({ onCheckIn }: VoiceCheckInProps) {
+export function VoiceCheckIn({ onCheckIn, targetContact, onClearTarget }: VoiceCheckInProps) {
   /** UI/state flags */
   const [isListening, setIsListening] = useState(false);       // mic actively capturing speech
   const [isProcessing, setIsProcessing] = useState(false);     // AI is running
@@ -313,16 +326,26 @@ export function VoiceCheckIn({ onCheckIn }: VoiceCheckInProps) {
             currentTranscript,
             result,
             audioClip,
+            targetContact
+              ? {
+                  email: targetContact.email ?? null,
+                  phone: targetContact.phone ?? null,
+                }
+              : null,
           );
           const notifiedCount = notifyResult?.contactCount ?? 0;
           const pushInfo = notifyResult?.anomalyPush;
 
-          let description =
-            notifiedCount > 0
-              ? `Shared with ${
-                  notifiedCount === 1 ? "1 emergency contact" : `${notifiedCount} emergency contacts`
-                }.`
-              : "Saved to your emergency dashboard for quick review.";
+          let description: string;
+          if (targetContact?.name && notifiedCount > 0) {
+            description = `Shared directly with ${targetContact.name}.`;
+          } else if (notifiedCount > 0) {
+            description = `Shared with ${
+              notifiedCount === 1 ? "1 emergency contact" : `${notifiedCount} emergency contacts`
+            }.`;
+          } else {
+            description = "Saved to your emergency dashboard for quick review.";
+          }
 
           if (result.anomalyDetected && pushInfo?.attempted) {
             const success = pushInfo.successCount ?? 0;
@@ -406,7 +429,7 @@ export function VoiceCheckIn({ onCheckIn }: VoiceCheckInProps) {
       recognitionRef.current = null;
       stopRecording().catch(() => null);
     };
-  }, [toast]);
+  }, [targetContact, toast]);
 
   /** Start/stop listening button handler */
   const handleToggleListening = () => {
@@ -464,6 +487,31 @@ export function VoiceCheckIn({ onCheckIn }: VoiceCheckInProps) {
         {getStatusText()}
       </p>
 
+      {targetContact?.name && (
+        <div className="flex w-full max-w-md flex-col items-center gap-2 rounded-md bg-primary/5 p-3 text-sm text-muted-foreground">
+          <p>
+            <strong>Sharing with:</strong> {targetContact.name}
+          </p>
+          <div className="flex flex-wrap justify-center gap-2 text-xs">
+            {targetContact.email && (
+              <span className="rounded-full bg-background px-3 py-1">
+                {targetContact.email}
+              </span>
+            )}
+            {targetContact.phone && (
+              <span className="rounded-full bg-background px-3 py-1">
+                {targetContact.phone}
+              </span>
+            )}
+          </div>
+          {onClearTarget && (
+            <Button type="button" variant="ghost" size="sm" onClick={onClearTarget}>
+              Clear recipient
+            </Button>
+          )}
+        </div>
+      )}
+
       {/* Show transcript once we have one */}
       {transcript && <p className="text-base text-muted-foreground">You said: “{transcript}”</p>}
 
@@ -484,6 +532,7 @@ export function VoiceCheckIn({ onCheckIn }: VoiceCheckInProps) {
         onClick={handleToggleListening}
         disabled={isProcessing || !supported}
         className="w-48 py-6 text-lg font-semibold"
+        data-voice-action="start"
       >
         {isListening ? <MicOff className="mr-2 h-6 w-6" /> : <Mic className="mr-2 h-6 w-6" />}
         {isListening ? "Stop" : "Start"}
