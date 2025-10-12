@@ -49,7 +49,7 @@ import { Separator } from "@/components/ui/separator";
 import { useToast } from "@/hooks/use-toast";
 
 // icons
-import { Siren, CheckCircle2, PhoneCall, Clock } from "lucide-react";
+import { Siren, CheckCircle2, PhoneCall, Clock, Mic } from "lucide-react";
 
 // roles
 import { normalizeRole } from "@/lib/roles";
@@ -1229,7 +1229,7 @@ export default function DashboardPage() {
                 <PhoneCall className="mx-auto h-10 w-10 text-muted-foreground" aria-hidden />
                 <CardTitle className={PRIMARY_CARD_TITLE_CLASSES}>Emergency Contacts</CardTitle>
                 <CardDescription className={PRIMARY_CARD_DESCRIPTION_CLASSES}>
-                  Call your emergency contacts instantly or send them a voiced update.
+                  Call your emergency contacts instantly when you need a quick check-in.
                 </CardDescription>
               </CardHeader>
               <CardContent className="flex flex-1 flex-col gap-6">
@@ -1261,16 +1261,19 @@ export default function DashboardPage() {
                     </Button>
                   </div>
                 </div>
+              </CardContent>
+            </Card>
 
-                <Separator className="mx-auto w-24" />
-
-                <div className="flex flex-col items-center gap-4 text-center">
-                  <h3 className="text-2xl font-semibold">Send a voice update</h3>
-                  <p className="max-w-lg text-base text-muted-foreground">
-                    Hold to record a quick message that we analyze and share with your emergency contacts.
-                  </p>
-                  <VoiceCheckIn onCheckIn={handleCheckIn} />
-                </div>
+            <Card className={`${PRIMARY_CARD_BASE_CLASSES} text-center`}>
+              <CardHeader className={`${PRIMARY_CARD_HEADER_CLASSES} items-center`}>
+                <Mic className="mx-auto h-10 w-10 text-muted-foreground" aria-hidden />
+                <CardTitle className={PRIMARY_CARD_TITLE_CLASSES}>Voice Update</CardTitle>
+                <CardDescription className={PRIMARY_CARD_DESCRIPTION_CLASSES}>
+                  Hold to record a quick message that we analyze and share with your emergency contacts.
+                </CardDescription>
+              </CardHeader>
+              <CardContent className="flex flex-1 flex-col items-center justify-center gap-6 text-center">
+                <VoiceCheckIn onCheckIn={handleCheckIn} />
               </CardContent>
             </Card>
           </div>
