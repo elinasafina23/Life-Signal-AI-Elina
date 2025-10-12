@@ -47,10 +47,17 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Separator } from "@/components/ui/separator";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { useToast } from "@/hooks/use-toast";
 
 // icons
-import { Siren, CheckCircle2, PhoneCall, Clock } from "lucide-react";
+import { Siren, CheckCircle2, PhoneCall, Clock, Mic } from "lucide-react";
 
 // roles
 import { normalizeRole } from "@/lib/roles";
@@ -222,6 +229,9 @@ export default function DashboardPage() {
     useState<string>("Emergency Contact 2");
   const [secondaryEmergencyContactEmail, setSecondaryEmergencyContactEmail] =
     useState<string | null>(null);
+  const [voiceMessageDialogOpen, setVoiceMessageDialogOpen] = useState(false);
+  const [voiceMessageDialogContact, setVoiceMessageDialogContact] =
+    useState<VoiceCheckInContact | null>(null);
   const [savedPhone, setSavedPhone] = useState<string>("");
   const [phoneDraft, setPhoneDraft] = useState<string>("");
   const [phoneSaving, setPhoneSaving] = useState(false);
@@ -1042,39 +1052,57 @@ export default function DashboardPage() {
     setPhoneDraft(savedPhone);
   }, [savedPhone]);
 
+  const handleOpenVoiceMessageDialog = useCallback((contact: VoiceCheckInContact | null) => {
+    if (!contact) return;
+    setVoiceMessageDialogContact(contact);
+    setVoiceMessageDialogOpen(true);
+  }, []);
+
+  const handleVoiceMessageDialogChange = useCallback((open: boolean) => {
+    setVoiceMessageDialogOpen(open);
+    if (!open) {
+      setVoiceMessageDialogContact(null);
+    }
+  }, []);
+
+  const handleVoiceMessageCheckIn = useCallback(async () => {
+    try {
+      await handleCheckIn();
+    } finally {
+      setVoiceMessageDialogOpen(false);
+      setVoiceMessageDialogContact(null);
+    }
+  }, [handleCheckIn]);
+
+  const primaryVoiceContact = useMemo<VoiceCheckInContact | null>(() => {
+    if (!primaryEmergencyContactEmail) return null;
+    return {
+      name: primaryEmergencyContactName,
+      email: primaryEmergencyContactEmail,
+      id:
+        mainUserUid && primaryEmergencyContactEmail
+          ? `${mainUserUid}_${primaryEmergencyContactEmail}`
+          : null,
+    };
+  }, [mainUserUid, primaryEmergencyContactEmail, primaryEmergencyContactName]);
+
+  const secondaryVoiceContact = useMemo<VoiceCheckInContact | null>(() => {
+    if (!secondaryEmergencyContactEmail) return null;
+    return {
+      name: secondaryEmergencyContactName,
+      email: secondaryEmergencyContactEmail,
+      id:
+        mainUserUid && secondaryEmergencyContactEmail
+          ? `${mainUserUid}_${secondaryEmergencyContactEmail}`
+          : null,
+    };
+  }, [mainUserUid, secondaryEmergencyContactEmail, secondaryEmergencyContactName]);
+
   const voiceContactOptions = useMemo(() => {
-    const contacts: VoiceCheckInContact[] = [];
-
-    if (primaryEmergencyContactEmail) {
-      contacts.push({
-        name: primaryEmergencyContactName,
-        email: primaryEmergencyContactEmail,
-        id:
-          mainUserUid && primaryEmergencyContactEmail
-            ? `${mainUserUid}_${primaryEmergencyContactEmail}`
-            : null,
-      });
-    }
-
-    if (secondaryEmergencyContactEmail) {
-      contacts.push({
-        name: secondaryEmergencyContactName,
-        email: secondaryEmergencyContactEmail,
-        id:
-          mainUserUid && secondaryEmergencyContactEmail
-            ? `${mainUserUid}_${secondaryEmergencyContactEmail}`
-            : null,
-      });
-    }
-
-    return contacts;
-  }, [
-    mainUserUid,
-    primaryEmergencyContactEmail,
-    primaryEmergencyContactName,
-    secondaryEmergencyContactEmail,
-    secondaryEmergencyContactName,
-  ]);
+    return [primaryVoiceContact, secondaryVoiceContact].filter(
+      (contact): contact is VoiceCheckInContact => Boolean(contact),
+    );
+  }, [primaryVoiceContact, secondaryVoiceContact]);
 
   // Prevent flashing dashboard before role check
   if (!roleChecked) {
@@ -1282,26 +1310,56 @@ export default function DashboardPage() {
                     <p className="text-sm text-muted-foreground">
                       {primaryEmergencyContactPhone || "Add a phone number to enable calling."}
                     </p>
-                    <Button
-                      onClick={() => handleDialEmergencyContact(primaryEmergencyContactPhone)}
-                      disabled={!primaryEmergencyContactPhone}
-                      className="mt-3 w-full"
-                    >
-                      Call
-                    </Button>
+                    <p className="text-sm text-muted-foreground">
+                      {primaryEmergencyContactEmail || "Add an email to enable voice messages."}
+                    </p>
+                    <div className="mt-3 flex flex-col gap-2 sm:flex-row">
+                      <Button
+                        onClick={() => handleDialEmergencyContact(primaryEmergencyContactPhone)}
+                        disabled={!primaryEmergencyContactPhone}
+                        className="w-full sm:flex-1"
+                      >
+                        Call
+                      </Button>
+                      <Button
+                        type="button"
+                        variant="secondary"
+                        onClick={() => handleOpenVoiceMessageDialog(primaryVoiceContact)}
+                        disabled={!primaryVoiceContact}
+                        className="w-full sm:flex-1"
+                      >
+                        <Mic className="mr-2 h-4 w-4" aria-hidden />
+                        Voice message
+                      </Button>
+                    </div>
                   </div>
                   <div className="rounded-lg border p-4">
                     <p className="text-xl font-semibold">{secondaryEmergencyContactName}</p>
                     <p className="text-sm text-muted-foreground">
                       {secondaryEmergencyContactPhone || "Add a phone number to enable calling."}
                     </p>
-                    <Button
-                      onClick={() => handleDialEmergencyContact(secondaryEmergencyContactPhone)}
-                      disabled={!secondaryEmergencyContactPhone}
-                      className="mt-3 w-full"
-                    >
-                      Call
-                    </Button>
+                    <p className="text-sm text-muted-foreground">
+                      {secondaryEmergencyContactEmail || "Add an email to enable voice messages."}
+                    </p>
+                    <div className="mt-3 flex flex-col gap-2 sm:flex-row">
+                      <Button
+                        onClick={() => handleDialEmergencyContact(secondaryEmergencyContactPhone)}
+                        disabled={!secondaryEmergencyContactPhone}
+                        className="w-full sm:flex-1"
+                      >
+                        Call
+                      </Button>
+                      <Button
+                        type="button"
+                        variant="secondary"
+                        onClick={() => handleOpenVoiceMessageDialog(secondaryVoiceContact)}
+                        disabled={!secondaryVoiceContact}
+                        className="w-full sm:flex-1"
+                      >
+                        <Mic className="mr-2 h-4 w-4" aria-hidden />
+                        Voice message
+                      </Button>
+                    </div>
                   </div>
                 </div>
 
@@ -1311,7 +1369,9 @@ export default function DashboardPage() {
                   <h3 className="text-2xl font-semibold">Send a voice update</h3>
                   <p className="max-w-lg text-base text-muted-foreground">
                     {voiceContactOptions.length
-                      ? "Choose an emergency contact below, then record a quick message that we analyze and share only with them."
+                      ? voiceContactOptions.length === 1
+                        ? "Record a quick message that we analyze and share with your emergency contact."
+                        : "Record one update and we'll analyze it before sharing with both emergency contacts. Use the voice message buttons above if you'd prefer to message someone individually."
                       : "Add emergency contact emails to send a voice update directly to each person."}
                   </p>
                   <VoiceCheckIn contacts={voiceContactOptions} onCheckIn={handleCheckIn} />
@@ -1464,6 +1524,31 @@ export default function DashboardPage() {
         </div>
       </main>
       <Footer />
+      <Dialog open={voiceMessageDialogOpen} onOpenChange={handleVoiceMessageDialogChange}>
+        <DialogContent className="sm:max-w-[520px]">
+          <DialogHeader>
+            <DialogTitle>Send a voice message</DialogTitle>
+            <DialogDescription>
+              {voiceMessageDialogContact
+                ? `Record a quick update and we'll analyze it before sharing with ${
+                    voiceMessageDialogContact.name || "your emergency contact"
+                  }.`
+                : "Record a quick update and we'll analyze it before sharing with your emergency contact."}
+            </DialogDescription>
+          </DialogHeader>
+          {voiceMessageDialogContact ? (
+            <VoiceCheckIn
+              contacts={voiceContactOptions}
+              targetContact={voiceMessageDialogContact}
+              onCheckIn={handleVoiceMessageCheckIn}
+            />
+          ) : (
+            <p className="text-sm text-muted-foreground">
+              Select an emergency contact to send a voice message.
+            </p>
+          )}
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

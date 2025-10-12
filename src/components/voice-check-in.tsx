@@ -72,9 +72,10 @@ async function notifyEmergencyContacts(
 export interface VoiceCheckInProps {
   onCheckIn?: () => void | Promise<void>;
   contacts?: VoiceCheckInContact[];
+  targetContact?: VoiceCheckInContact | null;
 }
 
-export function VoiceCheckIn({ onCheckIn, contacts }: VoiceCheckInProps) {
+export function VoiceCheckIn({ onCheckIn, contacts, targetContact }: VoiceCheckInProps) {
   /** UI/state flags */
   const [isListening, setIsListening] = useState(false);       // mic actively capturing speech
   const [isProcessing, setIsProcessing] = useState(false);     // AI is running
@@ -87,48 +88,31 @@ export function VoiceCheckIn({ onCheckIn, contacts }: VoiceCheckInProps) {
   /** We keep the recognition instance in a ref so it persists between renders */
   const recognitionRef = useRef<any | null>(null); // use `any` to avoid TS issues with webkit prefix
   const { toast } = useToast();
-  const [selectedContactKey, setSelectedContactKey] = useState<string | null>(null);
-
-  const contactOptions = useMemo(() => {
+  const normalizedContacts = useMemo(() => {
     if (!Array.isArray(contacts) || !contacts.length) return [];
 
-    return contacts
-      .map((contact, index) => {
-        const rawName = (contact?.name ?? "").trim();
-        const displayName = rawName || `Contact ${index + 1}`;
-        const email = contact?.email ? String(contact.email).trim().toLowerCase() : null;
-        const id = contact?.id ? String(contact.id).trim() : null;
-        const key = id || email || `contact-${index}`;
+    const deduped = new Map<string, VoiceCheckInContact>();
 
-        return {
-          key,
+    contacts.forEach((contact, index) => {
+      const rawName = (contact?.name ?? "").trim();
+      const displayName = rawName || `Contact ${index + 1}`;
+      const email = contact?.email ? String(contact.email).trim().toLowerCase() : null;
+      const id = contact?.id ? String(contact.id).trim() : null;
+
+      if (!email && !id) return;
+
+      const key = `${id ?? ""}|${email ?? ""}`;
+      if (!deduped.has(key)) {
+        deduped.set(key, {
+          id,
+          email,
           name: displayName,
-          payload: {
-            id,
-            email,
-            name: displayName,
-          } as VoiceCheckInContact,
-        };
-      })
-      .filter((option) => option.payload.email || option.payload.id);
+        });
+      }
+    });
+
+    return Array.from(deduped.values());
   }, [contacts]);
-
-  useEffect(() => {
-    if (!contactOptions.length) {
-      setSelectedContactKey(null);
-      return;
-    }
-
-    if (!selectedContactKey || !contactOptions.some((option) => option.key === selectedContactKey)) {
-      setSelectedContactKey(contactOptions[0].key);
-    }
-  }, [contactOptions, selectedContactKey]);
-
-  const selectedContact = useMemo(() => {
-    if (!selectedContactKey) return null;
-    const match = contactOptions.find((option) => option.key === selectedContactKey);
-    return match?.payload ?? null;
-  }, [contactOptions, selectedContactKey]);
 
   /** Audio recording helpers so we can send the original clip to emergency contacts */
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
@@ -137,11 +121,26 @@ export function VoiceCheckIn({ onCheckIn, contacts }: VoiceCheckInProps) {
   const audioPromiseRef = useRef<Promise<string | null> | null>(null);
   const audioResolveRef = useRef<((value: string | null) => void) | null>(null);
   const lastAudioUrlRef = useRef<string | null>(null);
-  const selectedContactRef = useRef<VoiceCheckInContact | null>(null);
+  const targetContactRef = useRef<VoiceCheckInContact | null>(null);
 
   useEffect(() => {
-    selectedContactRef.current = selectedContact;
-  }, [selectedContact]);
+    targetContactRef.current = targetContact ?? null;
+  }, [targetContact]);
+
+  const recipientDescriptor = useMemo(() => {
+    const trimmedTargetName = targetContact?.name?.trim();
+    if (trimmedTargetName) return trimmedTargetName;
+    if (targetContact) return "your emergency contact";
+
+    if (!normalizedContacts.length) return null;
+    if (normalizedContacts.length === 1) {
+      return normalizedContacts[0].name?.trim() || "your emergency contact";
+    }
+    if (normalizedContacts.length === 2) {
+      return "both emergency contacts";
+    }
+    return `${normalizedContacts.length} emergency contacts`;
+  }, [normalizedContacts, targetContact]);
 
   async function blobToDataUrl(blob: Blob): Promise<string> {
     return new Promise((resolve, reject) => {
@@ -373,7 +372,7 @@ export function VoiceCheckIn({ onCheckIn, contacts }: VoiceCheckInProps) {
 
         const audioClip = await audioClipPromise;
 
-        const activeContact = selectedContactRef.current;
+        const activeContact = targetContactRef.current;
         try {
           const notifyResult = await notifyEmergencyContacts(
             currentTranscript,
@@ -384,6 +383,11 @@ export function VoiceCheckIn({ onCheckIn, contacts }: VoiceCheckInProps) {
           const notifiedCount = notifyResult?.contactCount ?? 0;
           const pushInfo = notifyResult?.anomalyPush;
           const targeted = Boolean(activeContact);
+          const recipientCount = targeted
+            ? 1
+            : normalizedContacts.length > 0
+            ? normalizedContacts.length
+            : 0;
 
           let description: string;
           if (targeted) {
@@ -395,12 +399,19 @@ export function VoiceCheckIn({ onCheckIn, contacts }: VoiceCheckInProps) {
               description = `${contactName} isn't reachable yet, but we saved your analysis for quick review.`;
             }
           } else {
-            description =
-              notifiedCount > 0
-                ? `Shared with ${
-                    notifiedCount === 1 ? "1 emergency contact" : `${notifiedCount} emergency contacts`
-                  }.`
-                : "Saved to your emergency dashboard for quick review.";
+            if (notifiedCount > 0) {
+              if (recipientCount === 2 && notifiedCount >= 2) {
+                description = "Shared with both emergency contacts.";
+              } else if (recipientCount > 0) {
+                description = `Shared with ${
+                  notifiedCount === 1 ? "1 emergency contact" : `${notifiedCount} emergency contacts`
+                }.`;
+              } else {
+                description = "Shared with your emergency contacts.";
+              }
+            } else {
+              description = "Saved to your emergency dashboard for quick review.";
+            }
           }
 
           if (result.anomalyDetected && pushInfo?.attempted) {
@@ -487,7 +498,7 @@ export function VoiceCheckIn({ onCheckIn, contacts }: VoiceCheckInProps) {
       recognitionRef.current = null;
       stopRecording().catch(() => null);
     };
-  }, [toast]);
+  }, [normalizedContacts, toast]);
 
   /** Start/stop listening button handler */
   const handleToggleListening = () => {
@@ -526,45 +537,26 @@ export function VoiceCheckIn({ onCheckIn, contacts }: VoiceCheckInProps) {
   };
 
   const getStatusText = () => {
-    const contactName = selectedContact?.name?.trim();
     if (!supported) return "Speech recognition not supported";
     if (isListening)
-      return contactName ? `Listening for ${contactName}…` : "Listening…";
+      return recipientDescriptor ? `Listening for ${recipientDescriptor}…` : "Listening…";
     if (isProcessing)
-      return contactName ? `Analyzing message for ${contactName}…` : "Analyzing…";
+      return recipientDescriptor
+        ? `Analyzing message for ${recipientDescriptor}…`
+        : "Analyzing…";
     if (assessment)
       return assessment.anomalyDetected
-        ? contactName
-          ? `Anomaly detected for ${contactName}`
+        ? recipientDescriptor
+          ? `Anomaly detected for ${recipientDescriptor}`
           : "Anomaly Detected"
-        : contactName
-        ? `Message ready for ${contactName}`
+        : recipientDescriptor
+        ? `Message ready for ${recipientDescriptor}`
         : "Check-in Confirmed";
-    return contactName ? `Ready to message ${contactName}` : "Ready to listen";
+    return recipientDescriptor ? `Ready to message ${recipientDescriptor}` : "Ready to listen";
   };
 
   return (
     <div className="flex h-full w-full flex-col items-center justify-center gap-6 text-center">
-      {contactOptions.length > 0 && (
-        <div className="flex w-full max-w-xl flex-col items-center gap-3">
-          <p className="text-base font-medium text-muted-foreground">Choose who to notify</p>
-          <div className="flex flex-wrap justify-center gap-2">
-            {contactOptions.map((option) => (
-              <Button
-                key={option.key}
-                type="button"
-                variant={option.key === selectedContactKey ? "default" : "outline"}
-                onClick={() => setSelectedContactKey(option.key)}
-                disabled={isListening || isProcessing}
-                className="min-w-[9rem]"
-              >
-                {option.name}
-              </Button>
-            ))}
-          </div>
-        </div>
-      )}
-
       {/* Visual status circle */}
       <div className="flex h-32 w-32 items-center justify-center rounded-full bg-secondary shadow-inner">
         {getStatusIcon()}
@@ -574,6 +566,20 @@ export function VoiceCheckIn({ onCheckIn, contacts }: VoiceCheckInProps) {
       <p className="text-2xl font-semibold text-muted-foreground" aria-live="polite">
         {getStatusText()}
       </p>
+
+      {(targetContact || normalizedContacts.length > 0) && (
+        <p className="max-w-md text-sm text-muted-foreground">
+          {targetContact
+            ? `We'll analyze your update and share it with ${
+                targetContact.name?.trim() || "your emergency contact"
+              }.`
+            : normalizedContacts.length === 1
+            ? `We'll analyze your update and share it with ${
+                normalizedContacts[0].name?.trim() || "your emergency contact"
+              }.`
+            : `We'll analyze your update and share it with all of your emergency contacts.`}
+        </p>
+      )}
 
       {/* Show transcript once we have one */}
       {transcript && <p className="text-base text-muted-foreground">You said: “{transcript}”</p>}
