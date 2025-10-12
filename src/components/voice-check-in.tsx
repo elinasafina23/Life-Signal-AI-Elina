@@ -7,10 +7,22 @@ import { Button } from "@/components/ui/button";
 import type { AssessVoiceCheckInOutput } from "@/ai/flows/voice-check-in-assessment";
 import { useToast } from "@/hooks/use-toast";
 
+interface NotifyContactsResponse {
+  ok: boolean;
+  contactCount?: number;
+  anomalyPush?: {
+    attempted: boolean;
+    contactUidCount?: number;
+    tokenCount?: number;
+    successCount?: number;
+    failureCount?: number;
+  };
+}
+
 async function notifyEmergencyContacts(
   currentTranscript: string,
   aiAssessment: AssessVoiceCheckInOutput,
-) {
+): Promise<NotifyContactsResponse> {
   const response = await fetch("/api/voice-check-in/notify", {
     method: "POST",
     headers: {
@@ -28,7 +40,7 @@ async function notifyEmergencyContacts(
     throw new Error((data as any)?.error || "Failed to notify emergency contacts");
   }
 
-  return data as { ok: boolean; contactCount?: number };
+  return data as NotifyContactsResponse;
 }
 
 /**
@@ -143,14 +155,30 @@ export function VoiceCheckIn({ onCheckIn }: VoiceCheckInProps) {
         try {
           const notifyResult = await notifyEmergencyContacts(currentTranscript, result);
           const notifiedCount = notifyResult?.contactCount ?? 0;
+          const pushInfo = notifyResult?.anomalyPush;
+
+          let description =
+            notifiedCount > 0
+              ? `Shared with ${
+                  notifiedCount === 1 ? "1 emergency contact" : `${notifiedCount} emergency contacts`
+                }.`
+              : "Saved to your emergency dashboard for quick review.";
+
+          if (result.anomalyDetected && pushInfo?.attempted) {
+            const success = pushInfo.successCount ?? 0;
+            const tokens = pushInfo.tokenCount ?? 0;
+            if (success > 0) {
+              description += " Emergency contacts received a push alert about the anomaly.";
+            } else if (tokens > 0) {
+              description += " We attempted push alerts, but delivery failed. Check contact device registrations.";
+            } else {
+              description += " None of your emergency contacts have push notifications enabled yet.";
+            }
+          }
+
           toast({
             title: "Voice message sent",
-            description:
-              notifiedCount > 0
-                ? `Shared with ${
-                    notifiedCount === 1 ? "1 emergency contact" : `${notifiedCount} emergency contacts`
-                  }.`
-                : "Saved to your emergency dashboard for quick review.",
+            description,
           });
         } catch (notifyError: any) {
           console.error("Failed to notify emergency contacts:", notifyError);
