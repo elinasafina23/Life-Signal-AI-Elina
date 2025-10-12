@@ -45,6 +45,13 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { Separator } from "@/components/ui/separator";
 import { useToast } from "@/hooks/use-toast";
 
@@ -227,6 +234,7 @@ export default function DashboardPage() {
   const [phoneSaving, setPhoneSaving] = useState(false);
   const [voiceMessageTarget, setVoiceMessageTarget] =
     useState<VoiceMessageTarget | null>(null);
+  const [quickVoiceDialogOpen, setQuickVoiceDialogOpen] = useState(false);
 
   // 👇 explicit main user UID
   const [mainUserUid, setMainUserUid] = useState<string | null>(null);
@@ -955,6 +963,7 @@ export default function DashboardPage() {
   const handleVoiceCheckInComplete = useCallback(async () => {
     await handleCheckIn({ showToast: false });
     setVoiceMessageTarget(null);
+    setQuickVoiceDialogOpen(false);
   }, [handleCheckIn]);
 
   const handleVoiceMessageContact = useCallback(
@@ -985,15 +994,7 @@ export default function DashboardPage() {
         phone: phone || undefined,
         email: email || undefined,
       });
-
-      const voiceCard = document.getElementById("voice-update-card");
-      if (voiceCard) {
-        voiceCard.scrollIntoView({ behavior: "smooth", block: "center" });
-        const primaryButton = voiceCard.querySelector<HTMLButtonElement>(
-          'button[data-voice-action="start"]',
-        );
-        primaryButton?.focus({ preventScroll: true });
-      }
+      setQuickVoiceDialogOpen(true);
     },
     [
       primaryEmergencyContactEmail,
@@ -1132,13 +1133,41 @@ export default function DashboardPage() {
 
   // --- UI ---
   return (
-    <div className="flex flex-col min-h-screen bg-secondary">
-      <Header />
-      <main className="flex-grow container mx-auto px-4 py-8">
-        <h1 className="text-3xl md:text-4xl font-headline font-bold mb-6">Your Dashboard</h1>
-        <div className="grid grid-cols-1 gap-6 lg:grid-cols-2 xl:grid-cols-12">
-          {/* Primary column */}
-          <div className="grid grid-cols-1 gap-6 sm:grid-cols-2 auto-rows-[minmax(20rem,_1fr)] lg:col-span-1 xl:col-span-7">
+    <>
+      <Dialog
+        open={quickVoiceDialogOpen}
+        onOpenChange={(open) => {
+          setQuickVoiceDialogOpen(open);
+          if (!open) {
+            setVoiceMessageTarget(null);
+          }
+        }}
+      >
+        <DialogContent className="sm:max-w-xl">
+          <DialogHeader className="space-y-1.5">
+            <DialogTitle>Send a voice update</DialogTitle>
+            <DialogDescription>
+              {voiceMessageTarget
+                ? `Record a quick update for ${voiceMessageTarget.name}.`
+                : "Record a quick voice message for your emergency contacts."}
+            </DialogDescription>
+          </DialogHeader>
+          <div className="py-2">
+            <VoiceCheckIn
+              onCheckIn={handleVoiceCheckInComplete}
+              targetContact={voiceMessageTarget}
+              onClearTarget={() => setVoiceMessageTarget(null)}
+            />
+          </div>
+        </DialogContent>
+      </Dialog>
+      <div className="flex flex-col min-h-screen bg-secondary">
+        <Header />
+        <main className="flex-grow container mx-auto px-4 py-8">
+          <h1 className="text-3xl md:text-4xl font-headline font-bold mb-6">Your Dashboard</h1>
+          <div className="grid grid-cols-1 gap-6 lg:grid-cols-2 xl:grid-cols-12">
+            {/* Primary column */}
+            <div className="grid grid-cols-1 gap-6 sm:grid-cols-2 auto-rows-[minmax(20rem,_1fr)] lg:col-span-1 xl:col-span-7">
             {/* SOS */}
             <Card
               className={`${PRIMARY_CARD_BASE_CLASSES} aspect-square min-h-0 border border-destructive bg-destructive/10 text-center`}
@@ -1382,11 +1411,17 @@ export default function DashboardPage() {
                 </CardDescription>
               </CardHeader>
               <CardContent className="flex flex-1 flex-col items-center justify-center gap-6 text-center">
-                <VoiceCheckIn
-                  onCheckIn={handleVoiceCheckInComplete}
-                  targetContact={voiceMessageTarget}
-                  onClearTarget={() => setVoiceMessageTarget(null)}
-                />
+                {quickVoiceDialogOpen ? (
+                  <p className="max-w-md text-base text-muted-foreground">
+                    The quick voice message window is open. Finish or close it to use this recorder.
+                  </p>
+                ) : (
+                  <VoiceCheckIn
+                    onCheckIn={handleVoiceCheckInComplete}
+                    targetContact={voiceMessageTarget}
+                    onClearTarget={() => setVoiceMessageTarget(null)}
+                  />
+                )}
               </CardContent>
             </Card>
           </div>
@@ -1533,8 +1568,9 @@ export default function DashboardPage() {
             </Card>
           </div>
         </div>
-      </main>
-      <Footer />
-    </div>
+        </main>
+        <Footer />
+      </div>
+    </>
   );
 }
