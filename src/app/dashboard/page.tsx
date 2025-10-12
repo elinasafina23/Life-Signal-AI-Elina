@@ -1143,60 +1143,69 @@ export default function DashboardPage() {
                     Press the button to check in.
                   </p>
                 </div>
-                <div className="w-full max-w-sm space-y-2 text-left text-base">
-                  <p>
-                    Last Check-in:{" "}
-                    <span className="font-bold text-primary">{formatWhen(lastCheckIn)}</span>
-                  </p>
-                  <p>
-                    Next scheduled check-in:{" "}
-                    <span className="font-bold text-primary">{formatWhen(nextCheckIn)}</span>
-                  </p>
-                  <p>
-                    Countdown:{" "}
-                    <span
-                      className={
-                        status === "missed"
-                          ? "font-bold text-destructive"
-                          : "font-bold text-primary"
-                      }
+              </CardContent>
+            </Card>
+
+            <Card className={`${PRIMARY_CARD_BASE_CLASSES} min-h-0 sm:col-span-2`}>
+              <CardHeader className="space-y-2 text-left">
+                <CardTitle className="text-2xl font-headline">Status Overview</CardTitle>
+                <CardDescription className="text-base">
+                  Keep tabs on your latest check-in and countdown.
+                </CardDescription>
+              </CardHeader>
+              <CardContent>
+                <dl className="grid gap-4 text-base sm:grid-cols-2">
+                  <div className="space-y-1">
+                    <dt className="text-sm text-muted-foreground">Last check-in</dt>
+                    <dd className="text-lg font-semibold text-primary">{formatWhen(lastCheckIn)}</dd>
+                  </div>
+                  <div className="space-y-1">
+                    <dt className="text-sm text-muted-foreground">Next scheduled check-in</dt>
+                    <dd className="text-lg font-semibold text-primary">{formatWhen(nextCheckIn)}</dd>
+                  </div>
+                  <div className="space-y-1">
+                    <dt className="text-sm text-muted-foreground">Countdown</dt>
+                    <dd
+                      className={`text-lg font-semibold ${
+                        status === "missed" ? "text-destructive" : "text-primary"
+                      }`}
                     >
                       {timeLeft || "—"}
-                    </span>
-                  </p>
-                  <p>
-                    Status:{" "}
-                    <span
-                      className={
+                    </dd>
+                  </div>
+                  <div className="space-y-1">
+                    <dt className="text-sm text-muted-foreground">Status</dt>
+                    <dd
+                      className={`text-lg font-semibold ${
                         status === "safe"
-                          ? "font-bold text-green-600"
+                          ? "text-green-600"
                           : status === "missed"
-                          ? "font-bold text-destructive"
-                          : "font-bold text-muted-foreground"
-                      }
+                          ? "text-destructive"
+                          : "text-muted-foreground"
+                      }`}
                     >
                       {status.toUpperCase()}
-                    </span>
-                  </p>
-                  <p className="text-lg">
-                    Location Sharing:{" "}
-                    <span
-                      className={
+                    </dd>
+                  </div>
+                  <div className="space-y-1 sm:col-span-2">
+                    <dt className="text-sm text-muted-foreground">Location sharing</dt>
+                    <dd
+                      className={`text-lg font-semibold ${
                         locationSharing === true
-                          ? "font-bold text-green-600"
+                          ? "text-green-600"
                           : locationSharing === false
-                          ? "font-bold text-destructive"
-                          : "font-bold text-muted-foreground"
-                      }
+                          ? "text-destructive"
+                          : "text-muted-foreground"
+                      }`}
                     >
                       {locationSharing === null
                         ? "—"
                         : locationSharing
                         ? "Enabled"
                         : "Disabled"}
-                    </span>
-                  </p>
-                </div>
+                    </dd>
+                  </div>
+                </dl>
               </CardContent>
             </Card>
 
