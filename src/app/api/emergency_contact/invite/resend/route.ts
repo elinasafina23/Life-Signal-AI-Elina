@@ -171,7 +171,13 @@ export async function POST(req: NextRequest) {
 
     // Build the acceptance URL
     const origin = getOrigin(req);
-    const acceptUrl = `${origin}/emergency_contact/accept?invite=${inviteRef.id}&token=${token}`;
+    const acceptParams = new URLSearchParams({
+      role: "emergency_contact",
+      token,
+      next: "/emergency-dashboard",
+    });
+    acceptParams.set("invite", inviteRef.id);
+    const acceptUrl = `${origin}/signup?${acceptParams.toString()}`;
 
     /**
      * Optional: If you enforce verified email before acceptance,
@@ -187,7 +193,7 @@ export async function POST(req: NextRequest) {
         html: `
           <p>Hello${name ? " " + name : ""},</p>
           <p>You’ve been invited to be an <strong>emergency contact</strong>.</p>
-          <p><a href="${acceptUrl}">Accept invitation</a> (link expires in 7 days).</p>
+          <p><a href="${acceptUrl}">Create your account &amp; accept invitation</a> (link expires in 7 days).</p>
           <p>If the link doesn't work, copy this URL:<br>${acceptUrl}</p>
         `,
       },
