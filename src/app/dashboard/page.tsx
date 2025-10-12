@@ -290,7 +290,6 @@ export default function DashboardPage() {
         setSecondaryEmergencyContactName("Emergency Contact 2");
         setSecondaryEmergencyContactPhone(null);
         setSecondaryEmergencyContactEmail(null);
-        setVoiceMessageTarget(null);
         return;
       }
 
