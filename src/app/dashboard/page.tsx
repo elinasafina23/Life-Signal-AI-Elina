@@ -1292,20 +1292,8 @@ export default function DashboardPage() {
               </CardContent>
             </Card>
 
-            <Card className={`${PRIMARY_CARD_BASE_CLASSES} border-2 border-primary/30 text-center`}>
-              <CardHeader className={PRIMARY_CARD_HEADER_CLASSES}>
-                <CardTitle className={PRIMARY_CARD_TITLE_CLASSES}>Ask AI</CardTitle>
-                <CardDescription className={PRIMARY_CARD_DESCRIPTION_CLASSES}>
-                  Get instant guidance and let AI share a tone summary with your contacts.
-                </CardDescription>
-              </CardHeader>
-              <CardContent className="flex flex-1 flex-col justify-center gap-6 text-center">
-                <AskAiAssistant />
-              </CardContent>
-            </Card>
-
             {/* Emergency contact quick calls */}
-            <Card className={`${PRIMARY_CARD_BASE_CLASSES} text-center`}>
+            <Card className={`${PRIMARY_CARD_BASE_CLASSES} text-center min-h-[32rem]`}>
               <CardHeader className={`${PRIMARY_CARD_HEADER_CLASSES} items-center`}>
                 <PhoneCall className="mx-auto h-10 w-10 text-muted-foreground" aria-hidden />
                 <CardTitle className={PRIMARY_CARD_TITLE_CLASSES}>Emergency Contacts</CardTitle>
@@ -1317,12 +1305,16 @@ export default function DashboardPage() {
                 <div className="grid gap-4 sm:grid-cols-2">
                   <div className="rounded-lg border p-4">
                     <p className="text-xl font-semibold">{primaryEmergencyContactName}</p>
-                    <p className="text-sm text-muted-foreground">
-                      {primaryEmergencyContactPhone || "Add a phone number to enable calling."}
-                    </p>
-                    <p className="text-sm text-muted-foreground">
-                      {primaryEmergencyContactEmail || "Add an email to enable voice messages."}
-                    </p>
+                    {!primaryEmergencyContactPhone && (
+                      <p className="text-sm text-muted-foreground">
+                        Add a phone number in Settings to enable calling.
+                      </p>
+                    )}
+                    {!primaryVoiceContact && (
+                      <p className="text-sm text-muted-foreground">
+                        Add an email in Settings to enable voice messages.
+                      </p>
+                    )}
                     <div className="mt-3 flex flex-col gap-2">
                       <Button
                         onClick={() => handleDialEmergencyContact(primaryEmergencyContactPhone)}
@@ -1345,12 +1337,16 @@ export default function DashboardPage() {
                   </div>
                   <div className="rounded-lg border p-4">
                     <p className="text-xl font-semibold">{secondaryEmergencyContactName}</p>
-                    <p className="text-sm text-muted-foreground">
-                      {secondaryEmergencyContactPhone || "Add a phone number to enable calling."}
-                    </p>
-                    <p className="text-sm text-muted-foreground">
-                      {secondaryEmergencyContactEmail || "Add an email to enable voice messages."}
-                    </p>
+                    {!secondaryEmergencyContactPhone && (
+                      <p className="text-sm text-muted-foreground">
+                        Add a phone number in Settings to enable calling.
+                      </p>
+                    )}
+                    {!secondaryVoiceContact && (
+                      <p className="text-sm text-muted-foreground">
+                        Add an email in Settings to enable voice messages.
+                      </p>
+                    )}
                     <div className="mt-3 flex flex-col gap-2">
                       <Button
                         onClick={() => handleDialEmergencyContact(secondaryEmergencyContactPhone)}
@@ -1376,7 +1372,7 @@ export default function DashboardPage() {
               </CardContent>
             </Card>
 
-            <Card className={`${PRIMARY_CARD_BASE_CLASSES} text-center`}>
+            <Card className={`${PRIMARY_CARD_BASE_CLASSES} text-center min-h-[32rem]`}>
               <CardHeader className={PRIMARY_CARD_HEADER_CLASSES}>
                 <CardTitle className={PRIMARY_CARD_TITLE_CLASSES}>Voice Check-in</CardTitle>
                 <CardDescription className={PRIMARY_CARD_DESCRIPTION_CLASSES}>
@@ -1385,6 +1381,18 @@ export default function DashboardPage() {
               </CardHeader>
               <CardContent className="flex flex-1 flex-col items-center justify-center">
                 <VoiceCheckIn contacts={voiceContactOptions} onCheckIn={handleCheckIn} />
+              </CardContent>
+            </Card>
+
+            <Card className={`${PRIMARY_CARD_BASE_CLASSES} border-2 border-primary/30 text-center`}>
+              <CardHeader className={PRIMARY_CARD_HEADER_CLASSES}>
+                <CardTitle className={PRIMARY_CARD_TITLE_CLASSES}>Ask AI</CardTitle>
+                <CardDescription className={PRIMARY_CARD_DESCRIPTION_CLASSES}>
+                  Get instant guidance and let AI share a tone summary with your contacts.
+                </CardDescription>
+              </CardHeader>
+              <CardContent className="flex flex-1 flex-col justify-center gap-6 text-center">
+                <AskAiAssistant />
               </CardContent>
             </Card>
           </div>
