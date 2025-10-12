@@ -49,7 +49,7 @@ import { Separator } from "@/components/ui/separator";
 import { useToast } from "@/hooks/use-toast";
 
 // icons
-import { Siren, CheckCircle2, PhoneCall, Clock } from "lucide-react";
+import { Siren, CheckCircle2, PhoneCall, Clock, Mic } from "lucide-react";
 
 // roles
 import { normalizeRole } from "@/lib/roles";
@@ -1143,60 +1143,69 @@ export default function DashboardPage() {
                     Press the button to check in.
                   </p>
                 </div>
-                <div className="w-full max-w-sm space-y-2 text-left text-base">
-                  <p>
-                    Last Check-in:{" "}
-                    <span className="font-bold text-primary">{formatWhen(lastCheckIn)}</span>
-                  </p>
-                  <p>
-                    Next scheduled check-in:{" "}
-                    <span className="font-bold text-primary">{formatWhen(nextCheckIn)}</span>
-                  </p>
-                  <p>
-                    Countdown:{" "}
-                    <span
-                      className={
-                        status === "missed"
-                          ? "font-bold text-destructive"
-                          : "font-bold text-primary"
-                      }
+              </CardContent>
+            </Card>
+
+            <Card className={`${PRIMARY_CARD_BASE_CLASSES} aspect-square min-h-0 text-left`}>
+              <CardHeader className="space-y-2">
+                <CardTitle className="text-2xl font-headline">Status Overview</CardTitle>
+                <CardDescription className="text-base">
+                  Keep tabs on your latest check-in and countdown.
+                </CardDescription>
+              </CardHeader>
+              <CardContent className="flex flex-1 flex-col justify-center">
+                <dl className="grid gap-4 text-base sm:grid-cols-2">
+                  <div className="space-y-1">
+                    <dt className="text-sm text-muted-foreground">Last check-in</dt>
+                    <dd className="text-lg font-semibold text-primary">{formatWhen(lastCheckIn)}</dd>
+                  </div>
+                  <div className="space-y-1">
+                    <dt className="text-sm text-muted-foreground">Next scheduled check-in</dt>
+                    <dd className="text-lg font-semibold text-primary">{formatWhen(nextCheckIn)}</dd>
+                  </div>
+                  <div className="space-y-1">
+                    <dt className="text-sm text-muted-foreground">Countdown</dt>
+                    <dd
+                      className={`text-lg font-semibold ${
+                        status === "missed" ? "text-destructive" : "text-primary"
+                      }`}
                     >
                       {timeLeft || "—"}
-                    </span>
-                  </p>
-                  <p>
-                    Status:{" "}
-                    <span
-                      className={
+                    </dd>
+                  </div>
+                  <div className="space-y-1">
+                    <dt className="text-sm text-muted-foreground">Status</dt>
+                    <dd
+                      className={`text-lg font-semibold ${
                         status === "safe"
-                          ? "font-bold text-green-600"
+                          ? "text-green-600"
                           : status === "missed"
-                          ? "font-bold text-destructive"
-                          : "font-bold text-muted-foreground"
-                      }
+                          ? "text-destructive"
+                          : "text-muted-foreground"
+                      }`}
                     >
                       {status.toUpperCase()}
-                    </span>
-                  </p>
-                  <p className="text-lg">
-                    Location Sharing:{" "}
-                    <span
-                      className={
+                    </dd>
+                  </div>
+                  <div className="space-y-1 sm:col-span-2">
+                    <dt className="text-sm text-muted-foreground">Location sharing</dt>
+                    <dd
+                      className={`text-lg font-semibold ${
                         locationSharing === true
-                          ? "font-bold text-green-600"
+                          ? "text-green-600"
                           : locationSharing === false
-                          ? "font-bold text-destructive"
-                          : "font-bold text-muted-foreground"
-                      }
+                          ? "text-destructive"
+                          : "text-muted-foreground"
+                      }`}
                     >
                       {locationSharing === null
                         ? "—"
                         : locationSharing
                         ? "Enabled"
                         : "Disabled"}
-                    </span>
-                  </p>
-                </div>
+                    </dd>
+                  </div>
+                </dl>
               </CardContent>
             </Card>
 
@@ -1220,7 +1229,7 @@ export default function DashboardPage() {
                 <PhoneCall className="mx-auto h-10 w-10 text-muted-foreground" aria-hidden />
                 <CardTitle className={PRIMARY_CARD_TITLE_CLASSES}>Emergency Contacts</CardTitle>
                 <CardDescription className={PRIMARY_CARD_DESCRIPTION_CLASSES}>
-                  Call your emergency contacts instantly or send them a voiced update.
+                  Call your emergency contacts instantly when you need a quick check-in.
                 </CardDescription>
               </CardHeader>
               <CardContent className="flex flex-1 flex-col gap-6">
@@ -1252,16 +1261,19 @@ export default function DashboardPage() {
                     </Button>
                   </div>
                 </div>
+              </CardContent>
+            </Card>
 
-                <Separator className="mx-auto w-24" />
-
-                <div className="flex flex-col items-center gap-4 text-center">
-                  <h3 className="text-2xl font-semibold">Send a voice update</h3>
-                  <p className="max-w-lg text-base text-muted-foreground">
-                    Hold to record a quick message that we analyze and share with your emergency contacts.
-                  </p>
-                  <VoiceCheckIn onCheckIn={handleCheckIn} />
-                </div>
+            <Card className={`${PRIMARY_CARD_BASE_CLASSES} text-center`}>
+              <CardHeader className={`${PRIMARY_CARD_HEADER_CLASSES} items-center`}>
+                <Mic className="mx-auto h-10 w-10 text-muted-foreground" aria-hidden />
+                <CardTitle className={PRIMARY_CARD_TITLE_CLASSES}>Voice Update</CardTitle>
+                <CardDescription className={PRIMARY_CARD_DESCRIPTION_CLASSES}>
+                  Hold to record a quick message that we analyze and share with your emergency contacts.
+                </CardDescription>
+              </CardHeader>
+              <CardContent className="flex flex-1 flex-col items-center justify-center gap-6 text-center">
+                <VoiceCheckIn onCheckIn={handleCheckIn} />
               </CardContent>
             </Card>
           </div>
