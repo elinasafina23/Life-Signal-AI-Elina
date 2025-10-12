@@ -18,6 +18,7 @@ import { auth, db } from "@/firebase";
 import { Header } from "@/components/header";
 import { Footer } from "@/components/footer";
 import { VoiceCheckIn } from "@/components/voice-check-in";
+import { AskAiAssistant } from "@/components/ask-ai-assistant";
 import { EmergencyContacts } from "@/components/emergency-contact";
 import { useSosDialer } from "@/hooks/useSosDialer";
 import {
@@ -1055,7 +1056,7 @@ export default function DashboardPage() {
           <div className="grid grid-cols-1 gap-6 sm:grid-cols-2 auto-rows-[minmax(20rem,_1fr)] lg:col-span-1 xl:col-span-7">
             {/* SOS */}
             <Card
-              className={`${PRIMARY_CARD_BASE_CLASSES} border border-destructive bg-destructive/10 text-center`}
+              className={`${PRIMARY_CARD_BASE_CLASSES} aspect-square min-h-0 border border-destructive bg-destructive/10 text-center`}
             >
               <CardHeader className={PRIMARY_CARD_HEADER_CLASSES}>
                 <CardTitle className={`${PRIMARY_CARD_TITLE_CLASSES} text-destructive`}>
@@ -1122,14 +1123,14 @@ export default function DashboardPage() {
             </Card>
 
             {/* Check-in */}
-            <Card className={`${PRIMARY_CARD_BASE_CLASSES} text-center`}>
+            <Card className={`${PRIMARY_CARD_BASE_CLASSES} aspect-square min-h-0 text-center`}>
               <CardHeader className={PRIMARY_CARD_HEADER_CLASSES}>
                 <CardTitle className={PRIMARY_CARD_TITLE_CLASSES}>Check-in</CardTitle>
                 <CardDescription className={PRIMARY_CARD_DESCRIPTION_CLASSES}>
                   Let your contacts know you’re safe.
                 </CardDescription>
               </CardHeader>
-              <CardContent className="flex flex-1 flex-col items-center gap-6 pt-6 text-center">
+              <CardContent className="flex flex-1 flex-col items-center justify-center gap-8 text-center">
                 <div className="flex flex-col items-center gap-4">
                   <Button
                     onClick={() => handleCheckIn()}
@@ -1142,7 +1143,7 @@ export default function DashboardPage() {
                     Press the button to check in.
                   </p>
                 </div>
-                <div className="w-full space-y-3 text-lg text-center">
+                <div className="w-full max-w-sm space-y-2 text-left text-base">
                   <p>
                     Last Check-in:{" "}
                     <span className="font-bold text-primary">{formatWhen(lastCheckIn)}</span>
@@ -1200,54 +1201,66 @@ export default function DashboardPage() {
             </Card>
 
             <Card
-              className={`${PRIMARY_CARD_BASE_CLASSES} border-2 border-primary/30 text-center`}
+              className={`${PRIMARY_CARD_BASE_CLASSES} aspect-square min-h-0 border-2 border-primary/30 text-center`}
             >
               <CardHeader className={PRIMARY_CARD_HEADER_CLASSES}>
-                <CardTitle className={PRIMARY_CARD_TITLE_CLASSES}>Voice Message</CardTitle>
+                <CardTitle className={PRIMARY_CARD_TITLE_CLASSES}>Ask AI</CardTitle>
                 <CardDescription className={PRIMARY_CARD_DESCRIPTION_CLASSES}>
-                  Record a short update that we analyze and share with your emergency contacts.
+                  Get instant guidance and let AI share a tone summary with your contacts.
                 </CardDescription>
               </CardHeader>
-              <CardContent className="flex flex-1 flex-col items-center gap-6 pt-6 text-center">
-                <VoiceCheckIn onCheckIn={handleCheckIn} />
+              <CardContent className="flex flex-1 flex-col justify-center gap-6 text-center">
+                <AskAiAssistant />
               </CardContent>
             </Card>
 
             {/* Emergency contact quick calls */}
-            <Card className={PRIMARY_CARD_BASE_CLASSES}>
+            <Card className={`${PRIMARY_CARD_BASE_CLASSES} text-center`}>
               <CardHeader className={`${PRIMARY_CARD_HEADER_CLASSES} items-center`}>
                 <PhoneCall className="mx-auto h-10 w-10 text-muted-foreground" aria-hidden />
                 <CardTitle className={PRIMARY_CARD_TITLE_CLASSES}>Emergency Contacts</CardTitle>
                 <CardDescription className={PRIMARY_CARD_DESCRIPTION_CLASSES}>
-                  Call your emergency contacts instantly.
+                  Call your emergency contacts instantly or send them a voiced update.
                 </CardDescription>
               </CardHeader>
-              <CardContent className="flex flex-1 flex-col gap-4">
-                <div className="rounded-lg border p-4 text-center">
-                  <p className="text-xl font-semibold">{primaryEmergencyContactName}</p>
-                  <p className="text-sm text-muted-foreground">
-                    {primaryEmergencyContactPhone || "Add a phone number to enable calling."}
-                  </p>
-                  <Button
-                    onClick={() => handleDialEmergencyContact(primaryEmergencyContactPhone)}
-                    disabled={!primaryEmergencyContactPhone}
-                    className="mt-3 w-full sm:w-auto"
-                  >
-                    Call
-                  </Button>
+              <CardContent className="flex flex-1 flex-col gap-6">
+                <div className="grid gap-4 sm:grid-cols-2">
+                  <div className="rounded-lg border p-4">
+                    <p className="text-xl font-semibold">{primaryEmergencyContactName}</p>
+                    <p className="text-sm text-muted-foreground">
+                      {primaryEmergencyContactPhone || "Add a phone number to enable calling."}
+                    </p>
+                    <Button
+                      onClick={() => handleDialEmergencyContact(primaryEmergencyContactPhone)}
+                      disabled={!primaryEmergencyContactPhone}
+                      className="mt-3 w-full"
+                    >
+                      Call
+                    </Button>
+                  </div>
+                  <div className="rounded-lg border p-4">
+                    <p className="text-xl font-semibold">{secondaryEmergencyContactName}</p>
+                    <p className="text-sm text-muted-foreground">
+                      {secondaryEmergencyContactPhone || "Add a phone number to enable calling."}
+                    </p>
+                    <Button
+                      onClick={() => handleDialEmergencyContact(secondaryEmergencyContactPhone)}
+                      disabled={!secondaryEmergencyContactPhone}
+                      className="mt-3 w-full"
+                    >
+                      Call
+                    </Button>
+                  </div>
                 </div>
-                <div className="rounded-lg border p-4 text-center">
-                  <p className="text-xl font-semibold">{secondaryEmergencyContactName}</p>
-                  <p className="text-sm text-muted-foreground">
-                    {secondaryEmergencyContactPhone || "Add a phone number to enable calling."}
+
+                <Separator className="mx-auto w-24" />
+
+                <div className="flex flex-col items-center gap-4 text-center">
+                  <h3 className="text-2xl font-semibold">Send a voice update</h3>
+                  <p className="max-w-lg text-base text-muted-foreground">
+                    Hold to record a quick message that we analyze and share with your emergency contacts.
                   </p>
-                  <Button
-                    onClick={() => handleDialEmergencyContact(secondaryEmergencyContactPhone)}
-                    disabled={!secondaryEmergencyContactPhone}
-                    className="mt-3 w-full sm:w-auto"
-                  >
-                    Call
-                  </Button>
+                  <VoiceCheckIn onCheckIn={handleCheckIn} />
                 </div>
               </CardContent>
             </Card>
