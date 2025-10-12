@@ -1233,7 +1233,7 @@ export default function DashboardPage() {
                     disabled={!primaryEmergencyContactPhone}
                     className="mt-3 w-full sm:w-auto"
                   >
-                    Call Emergency Contact 1
+                    Call
                   </Button>
                 </div>
                 <div className="rounded-lg border p-4 text-center">
@@ -1246,7 +1246,7 @@ export default function DashboardPage() {
                     disabled={!secondaryEmergencyContactPhone}
                     className="mt-3 w-full sm:w-auto"
                   >
-                    Call Emergency Contact 2
+                    Call
                   </Button>
                 </div>
               </CardContent>
