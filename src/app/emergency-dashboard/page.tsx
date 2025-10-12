@@ -82,6 +82,7 @@ export type MainUserCard = {
     explanation: string;
     anomalyDetected: boolean;
     createdAt: Date | null;
+    expiresAt: Date | null;
     audioUrl?: string | null;
   } | null;
 };
@@ -105,6 +106,7 @@ export type MainUserDoc = {
     explanation?: string;
     anomalyDetected?: boolean;
     createdAt?: Timestamp;
+    expiresAt?: Timestamp | Date | string | number | null;
     audioDataUrl?: string;
   };
 };
@@ -132,6 +134,33 @@ function initialsAndColor(name = "") {
     name.split("").reduce((sum, char) => sum + char.charCodeAt(0), 0) % userColors.length;
 
   return { initials, colorClass: userColors[colorIndex] };
+}
+
+function toDateOrNull(value: unknown): Date | null {
+  if (!value) return null;
+  if (value instanceof Timestamp) {
+    return value.toDate();
+  }
+  if (value instanceof Date) {
+    return Number.isNaN(value.getTime()) ? null : value;
+  }
+  if (typeof value === "number") {
+    const date = new Date(value);
+    return Number.isNaN(date.getTime()) ? null : date;
+  }
+  if (typeof value === "string") {
+    const date = new Date(value);
+    return Number.isNaN(date.getTime()) ? null : date;
+  }
+  if (typeof value === "object" && typeof (value as any)?.toDate === "function") {
+    try {
+      const date = (value as any).toDate();
+      return date instanceof Date && !Number.isNaN(date.getTime()) ? date : null;
+    } catch {
+      return null;
+    }
+  }
+  return null;
 }
 
 function getStatusVariant(status?: string) {
@@ -409,6 +438,8 @@ export default function EmergencyDashboardPage() {
                 const sanitizedPhone = sanitizePhone((userData as any)?.phone);
 
                 const rawVoice = (userData as any)?.latestVoiceMessage;
+                const latestVoiceCreatedAt = toDateOrNull(rawVoice?.createdAt);
+                const latestVoiceExpiresAt = toDateOrNull(rawVoice?.expiresAt);
                 let latestVoiceMessage = rawVoice
                   ? {
                       transcript:
@@ -416,10 +447,8 @@ export default function EmergencyDashboardPage() {
                       explanation:
                         typeof rawVoice?.explanation === "string" ? rawVoice.explanation : "",
                       anomalyDetected: Boolean(rawVoice?.anomalyDetected),
-                      createdAt:
-                        rawVoice?.createdAt instanceof Timestamp
-                          ? rawVoice.createdAt.toDate()
-                          : null,
+                      createdAt: latestVoiceCreatedAt,
+                      expiresAt: latestVoiceExpiresAt,
                       audioUrl:
                         typeof rawVoice?.audioDataUrl === "string" && rawVoice.audioDataUrl.trim()
                           ? rawVoice.audioDataUrl
@@ -434,6 +463,13 @@ export default function EmergencyDashboardPage() {
                   !latestVoiceMessage.transcript &&
                   !latestVoiceMessage.explanation &&
                   !latestVoiceMessage.audioUrl
+                ) {
+                  latestVoiceMessage = null;
+                }
+
+                if (
+                  latestVoiceMessage?.expiresAt &&
+                  latestVoiceMessage.expiresAt.getTime() <= Date.now()
                 ) {
                   latestVoiceMessage = null;
                 }

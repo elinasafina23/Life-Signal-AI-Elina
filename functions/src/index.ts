@@ -692,6 +692,104 @@ export const runEscalationScan = onRequest(
 );
 
 /** ------------------------------------------------------
+ *  Purge voice messages after their retention window
+ *  ------------------------------------------------------ */
+export const purgeExpiredVoiceMessages = onSchedule(
+  {
+    region: "us-central1",
+    schedule: "every 30 minutes",
+    timeZone: "Etc/UTC",
+  },
+  async () => {
+    const now = new Date();
+
+    try {
+      const expiredMessagesSnap = await db
+        .collectionGroup("voiceMessages")
+        .where("expiresAt", "<=", now)
+        .limit(500)
+        .get();
+
+      const affectedUsers = new Set<string>();
+
+      if (!expiredMessagesSnap.empty) {
+        let batch = db.batch();
+        const ops = { count: 0 };
+
+        for (const doc of expiredMessagesSnap.docs) {
+          batch.delete(doc.ref);
+          ops.count++;
+          const mainUserUid = doc.ref.parent.parent?.id;
+          if (mainUserUid) {
+            affectedUsers.add(mainUserUid);
+          }
+          batch = await commitOrRotate(batch, ops);
+        }
+
+        if (ops.count) {
+          await batch.commit();
+        }
+      }
+
+      for (const mainUserUid of Array.from(affectedUsers)) {
+        try {
+          const userRef = db.doc(`users/${mainUserUid}`);
+          const userSnap = await userRef.get();
+          if (!userSnap.exists) continue;
+
+          const latestVoice = (userSnap.data() as any)?.latestVoiceMessage;
+          const expiresMs = toMillis(latestVoice?.expiresAt);
+          if (expiresMs && expiresMs <= now.getTime()) {
+            await userRef.set(
+              {
+                latestVoiceMessage: FieldValue.delete(),
+                updatedAt: FieldValue.serverTimestamp(),
+              },
+              { merge: true }
+            );
+          }
+        } catch (err) {
+          logger.warn("Failed to clear expired latestVoiceMessage", {
+            mainUserUid,
+            error: (err as any)?.message,
+          });
+        }
+      }
+
+      const contactsSnap = await db
+        .collection("emergencyContacts")
+        .where("lastVoiceMessage.expiresAt", "<=", now)
+        .limit(500)
+        .get();
+
+      if (!contactsSnap.empty) {
+        let batch = db.batch();
+        const ops = { count: 0 };
+
+        for (const doc of contactsSnap.docs) {
+          batch.set(
+            doc.ref,
+            {
+              lastVoiceMessage: FieldValue.delete(),
+              updatedAt: FieldValue.serverTimestamp(),
+            },
+            { merge: true }
+          );
+          ops.count++;
+          batch = await commitOrRotate(batch, ops);
+        }
+
+        if (ops.count) {
+          await batch.commit();
+        }
+      }
+    } catch (error: any) {
+      logger.error("purgeExpiredVoiceMessages failed", error?.message);
+    }
+  }
+);
+
+/** ------------------------------------------------------
  *  SCHEDULED function — KEEP THE ORIGINAL NAME
  *  ------------------------------------------------------ */
 export const checkMissedCheckins = onSchedule(
