@@ -86,12 +86,6 @@ interface UserDoc {
 type Status = "safe" | "missed" | "unknown";
 type LocationShareReason = "sos" | "escalation";
 
-type VoiceMessageTarget = {
-  name: string;
-  email?: string | null;
-  phone?: string | null;
-};
-
 // helper to compute minutes-since-epoch
 const toEpochMinutes = (ms: number) => Math.floor(ms / 60000);
 
@@ -225,9 +219,6 @@ export default function DashboardPage() {
   const [savedPhone, setSavedPhone] = useState<string>("");
   const [phoneDraft, setPhoneDraft] = useState<string>("");
   const [phoneSaving, setPhoneSaving] = useState(false);
-  const [voiceMessageTarget, setVoiceMessageTarget] =
-    useState<VoiceMessageTarget | null>(null);
-
   // 👇 explicit main user UID
   const [mainUserUid, setMainUserUid] = useState<string | null>(null);
 
@@ -954,57 +945,7 @@ export default function DashboardPage() {
 
   const handleVoiceCheckInComplete = useCallback(async () => {
     await handleCheckIn({ showToast: false });
-    setVoiceMessageTarget(null);
   }, [handleCheckIn]);
-
-  const handleVoiceMessageContact = useCallback(
-    (contact: "primary" | "secondary") => {
-      const isPrimary = contact === "primary";
-      const name = isPrimary
-        ? primaryEmergencyContactName
-        : secondaryEmergencyContactName;
-      const phone = isPrimary
-        ? primaryEmergencyContactPhone
-        : secondaryEmergencyContactPhone;
-      const email = isPrimary
-        ? primaryEmergencyContactEmail
-        : secondaryEmergencyContactEmail;
-
-      if (!phone && !email) {
-        toast({
-          title: "Add contact details",
-          description:
-            "Provide a phone number or email to send them a voice message.",
-          variant: "destructive",
-        });
-        return;
-      }
-
-      setVoiceMessageTarget({
-        name,
-        phone: phone || undefined,
-        email: email || undefined,
-      });
-
-      const voiceCard = document.getElementById("voice-update-card");
-      if (voiceCard) {
-        voiceCard.scrollIntoView({ behavior: "smooth", block: "center" });
-        const primaryButton = voiceCard.querySelector<HTMLButtonElement>(
-          'button[data-voice-action="start"]',
-        );
-        primaryButton?.focus({ preventScroll: true });
-      }
-    },
-    [
-      primaryEmergencyContactEmail,
-      primaryEmergencyContactName,
-      primaryEmergencyContactPhone,
-      secondaryEmergencyContactEmail,
-      secondaryEmergencyContactName,
-      secondaryEmergencyContactPhone,
-      toast,
-    ],
-  );
 
   useEffect(() => {
     if (autoCheckInTriggeredRef.current) return;
@@ -1324,23 +1265,13 @@ export default function DashboardPage() {
                     <p className="text-sm text-muted-foreground">
                       {primaryEmergencyContactPhone || "Add a phone number to enable calling."}
                     </p>
-                    <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-2">
+                    <div className="mt-3 grid grid-cols-1 gap-2">
                       <Button
                         onClick={() => handleDialEmergencyContact(primaryEmergencyContactPhone)}
                         disabled={!primaryEmergencyContactPhone}
                         className="w-full"
                       >
                         Call
-                      </Button>
-                      <Button
-                        type="button"
-                        variant="outline"
-                        onClick={() => handleVoiceMessageContact("primary")}
-                        disabled={!primaryEmergencyContactPhone && !primaryEmergencyContactEmail}
-                        className="w-full"
-                      >
-                        <Mic className="mr-2 h-4 w-4" aria-hidden />
-                        Voice
                       </Button>
                     </div>
                   </div>
@@ -1349,23 +1280,13 @@ export default function DashboardPage() {
                     <p className="text-sm text-muted-foreground">
                       {secondaryEmergencyContactPhone || "Add a phone number to enable calling."}
                     </p>
-                    <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-2">
+                    <div className="mt-3 grid grid-cols-1 gap-2">
                       <Button
                         onClick={() => handleDialEmergencyContact(secondaryEmergencyContactPhone)}
                         disabled={!secondaryEmergencyContactPhone}
                         className="w-full"
                       >
                         Call
-                      </Button>
-                      <Button
-                        type="button"
-                        variant="outline"
-                        onClick={() => handleVoiceMessageContact("secondary")}
-                        disabled={!secondaryEmergencyContactPhone && !secondaryEmergencyContactEmail}
-                        className="w-full"
-                      >
-                        <Mic className="mr-2 h-4 w-4" aria-hidden />
-                        Voice
                       </Button>
                     </div>
                   </div>
@@ -1382,11 +1303,7 @@ export default function DashboardPage() {
                 </CardDescription>
               </CardHeader>
               <CardContent className="flex flex-1 flex-col items-center justify-center gap-6 text-center">
-                <VoiceCheckIn
-                  onCheckIn={handleVoiceCheckInComplete}
-                  targetContact={voiceMessageTarget}
-                  onClearTarget={() => setVoiceMessageTarget(null)}
-                />
+                <VoiceCheckIn onCheckIn={handleVoiceCheckInComplete} />
               </CardContent>
             </Card>
           </div>
