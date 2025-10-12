@@ -57,11 +57,20 @@ async function requireMainUser(req: NextRequest) {
  * (env overrides, else use the request origin).
  */
 function getOrigin(req: NextRequest) {
-  return (
-    process.env.APP_ORIGIN ||
-    process.env.NEXT_PUBLIC_APP_ORIGIN ||
-    new URL(req.url).origin
-  );
+  const configuredOrigin =
+    process.env.APP_ORIGIN || process.env.NEXT_PUBLIC_APP_ORIGIN || "";
+
+  if (configuredOrigin) {
+    try {
+      // Ensure we only keep scheme + host (strip any accidental path components)
+      return new URL(configuredOrigin).origin;
+    } catch {
+      // Fallback: trim trailing slashes so we can safely append paths below
+      return configuredOrigin.replace(/\/+$/, "");
+    }
+  }
+
+  return new URL(req.url).origin;
 }
 
 // Invite links expire after 7 days
@@ -195,13 +204,15 @@ export async function POST(req: NextRequest) {
       next: "/emergency-dashboard",
     });
     acceptParams.set("invite", inviteRef.id);
-    const acceptUrl = `${origin}/signup?${acceptParams.toString()}`;
+    const acceptUrl = new URL("/signup", origin);
+    acceptUrl.search = acceptParams.toString();
 
     /**
      * Optional: If you enforce verified email before acceptance,
      * send them to /verify-email first, then continue to acceptUrl.
      */
-    const verifyContinue = `${origin}/verify-email?next=${encodeURIComponent(acceptUrl)}`;
+    const verifyContinue = new URL("/verify-email", origin);
+    verifyContinue.searchParams.set("next", acceptUrl.toString());
 
     // Send the email using your /mail collection (Firebase Ext or your mail worker)
     await db.collection("mail").add({
@@ -221,8 +232,8 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({
       ok: true,
       inviteId: inviteRef.id,
-      acceptUrl,
-      verifyContinue,
+      acceptUrl: acceptUrl.toString(),
+      verifyContinue: verifyContinue.toString(),
       emergencyContactId,
       wasResent: ecStatus === "PENDING" || !ecSnap.exists ? true : false,
     });
