@@ -206,16 +206,19 @@ export default function DashboardPage() {
     useState<EmergencyServiceCountryCode>(DEFAULT_EMERGENCY_SERVICE_COUNTRY);
   const [primaryEmergencyContactPhone, setPrimaryEmergencyContactPhone] =
     useState<string | null>(null);
+  const [primaryEmergencyContactEmail, setPrimaryEmergencyContactEmail] =
+    useState<string | null>(null);
   const [primaryEmergencyContactName, setPrimaryEmergencyContactName] =
     useState<string>("Emergency Contact 1");
   const [secondaryEmergencyContactPhone, setSecondaryEmergencyContactPhone] =
+    useState<string | null>(null);
+  const [secondaryEmergencyContactEmail, setSecondaryEmergencyContactEmail] =
     useState<string | null>(null);
   const [secondaryEmergencyContactName, setSecondaryEmergencyContactName] =
     useState<string>("Emergency Contact 2");
   const [savedPhone, setSavedPhone] = useState<string>("");
   const [phoneDraft, setPhoneDraft] = useState<string>("");
   const [phoneSaving, setPhoneSaving] = useState(false);
-
   // 👇 explicit main user UID
   const [mainUserUid, setMainUserUid] = useState<string | null>(null);
 
@@ -281,6 +284,13 @@ export default function DashboardPage() {
         setSavedPhone("");
         setPhoneDraft("");
         setPhoneSaving(false);
+        setPrimaryEmergencyContactName("Emergency Contact 1");
+        setPrimaryEmergencyContactPhone(null);
+        setPrimaryEmergencyContactEmail(null);
+        setSecondaryEmergencyContactName("Emergency Contact 2");
+        setSecondaryEmergencyContactPhone(null);
+        setSecondaryEmergencyContactEmail(null);
+        setVoiceMessageTarget(null);
         return;
       }
 
@@ -375,6 +385,11 @@ export default function DashboardPage() {
               ? sanitizePhone(contacts.contact1_phone)
               : "";
           setPrimaryEmergencyContactPhone(phone || null);
+          const email =
+            typeof contacts.contact1_email === "string"
+              ? contacts.contact1_email.trim()
+              : "";
+          setPrimaryEmergencyContactEmail(email || null);
 
           const secondFirst =
             typeof contacts.contact2_firstName === "string"
@@ -394,12 +409,19 @@ export default function DashboardPage() {
               ? sanitizePhone(contacts.contact2_phone)
               : "";
           setSecondaryEmergencyContactPhone(secondPhone || null);
+          const secondEmail =
+            typeof contacts.contact2_email === "string"
+              ? contacts.contact2_email.trim()
+              : "";
+          setSecondaryEmergencyContactEmail(secondEmail || null);
         } else {
           setEmergencyServiceCountry(DEFAULT_EMERGENCY_SERVICE_COUNTRY);
           setPrimaryEmergencyContactName("Emergency Contact 1");
           setPrimaryEmergencyContactPhone(null);
+          setPrimaryEmergencyContactEmail(null);
           setSecondaryEmergencyContactName("Emergency Contact 2");
           setSecondaryEmergencyContactPhone(null);
+          setSecondaryEmergencyContactEmail(null);
         }
 
         setUserDocLoaded(true);
@@ -921,6 +943,10 @@ export default function DashboardPage() {
     [clearSharedLocation, intervalMinutes, locationShareReason, toast]
   );
 
+  const handleVoiceCheckInComplete = useCallback(async () => {
+    await handleCheckIn({ showToast: false });
+  }, [handleCheckIn]);
+
   useEffect(() => {
     if (autoCheckInTriggeredRef.current) return;
     if (!roleChecked || !mainUserUid || !userDocLoaded || !userRef.current) return;
@@ -1239,32 +1265,36 @@ export default function DashboardPage() {
                     <p className="text-sm text-muted-foreground">
                       {primaryEmergencyContactPhone || "Add a phone number to enable calling."}
                     </p>
-                    <Button
-                      onClick={() => handleDialEmergencyContact(primaryEmergencyContactPhone)}
-                      disabled={!primaryEmergencyContactPhone}
-                      className="mt-3 w-full"
-                    >
-                      Call
-                    </Button>
+                    <div className="mt-3 grid grid-cols-1 gap-2">
+                      <Button
+                        onClick={() => handleDialEmergencyContact(primaryEmergencyContactPhone)}
+                        disabled={!primaryEmergencyContactPhone}
+                        className="w-full"
+                      >
+                        Call
+                      </Button>
+                    </div>
                   </div>
                   <div className="rounded-lg border p-4">
                     <p className="text-xl font-semibold">{secondaryEmergencyContactName}</p>
                     <p className="text-sm text-muted-foreground">
                       {secondaryEmergencyContactPhone || "Add a phone number to enable calling."}
                     </p>
-                    <Button
-                      onClick={() => handleDialEmergencyContact(secondaryEmergencyContactPhone)}
-                      disabled={!secondaryEmergencyContactPhone}
-                      className="mt-3 w-full"
-                    >
-                      Call
-                    </Button>
+                    <div className="mt-3 grid grid-cols-1 gap-2">
+                      <Button
+                        onClick={() => handleDialEmergencyContact(secondaryEmergencyContactPhone)}
+                        disabled={!secondaryEmergencyContactPhone}
+                        className="w-full"
+                      >
+                        Call
+                      </Button>
+                    </div>
                   </div>
                 </div>
               </CardContent>
             </Card>
 
-            <Card className={`${PRIMARY_CARD_BASE_CLASSES} text-center`}>
+            <Card id="voice-update-card" className={`${PRIMARY_CARD_BASE_CLASSES} text-center`}>
               <CardHeader className={`${PRIMARY_CARD_HEADER_CLASSES} items-center`}>
                 <Mic className="mx-auto h-10 w-10 text-muted-foreground" aria-hidden />
                 <CardTitle className={PRIMARY_CARD_TITLE_CLASSES}>Voice Update</CardTitle>
@@ -1273,7 +1303,7 @@ export default function DashboardPage() {
                 </CardDescription>
               </CardHeader>
               <CardContent className="flex flex-1 flex-col items-center justify-center gap-6 text-center">
-                <VoiceCheckIn onCheckIn={handleCheckIn} />
+                <VoiceCheckIn onCheckIn={handleVoiceCheckInComplete} />
               </CardContent>
             </Card>
           </div>
