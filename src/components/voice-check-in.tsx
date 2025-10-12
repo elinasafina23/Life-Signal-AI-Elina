@@ -1,11 +1,17 @@
 // src/components/voice-check-in.tsx
 "use client";
 
-import { useState, useEffect, useRef } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Mic, MicOff, Loader, ShieldAlert, ShieldCheck } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import type { AssessVoiceCheckInOutput } from "@/ai/flows/voice-check-in-assessment";
 import { useToast } from "@/hooks/use-toast";
+
+export interface VoiceCheckInContact {
+  id?: string | null;
+  email?: string | null;
+  name: string;
+}
 
 interface NotifyContactsResponse {
   ok: boolean;
@@ -23,17 +29,28 @@ async function notifyEmergencyContacts(
   currentTranscript: string,
   aiAssessment: AssessVoiceCheckInOutput,
   audioDataUrl?: string | null,
+  targetContact?: VoiceCheckInContact | null,
 ): Promise<NotifyContactsResponse> {
+  const payload: Record<string, unknown> = {
+    transcribedSpeech: currentTranscript,
+    assessment: aiAssessment,
+    audioDataUrl,
+  };
+
+  if (targetContact && (targetContact.id || targetContact.email)) {
+    payload.targetContact = {
+      id: targetContact.id ?? null,
+      email: targetContact.email ? targetContact.email.toLowerCase() : null,
+      name: targetContact.name ?? null,
+    };
+  }
+
   const response = await fetch("/api/voice-check-in/notify", {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
     },
-    body: JSON.stringify({
-      transcribedSpeech: currentTranscript,
-      assessment: aiAssessment,
-      audioDataUrl,
-    }),
+    body: JSON.stringify(payload),
   });
 
   const data = await response.json().catch(() => ({}));
@@ -54,9 +71,10 @@ async function notifyEmergencyContacts(
  */
 export interface VoiceCheckInProps {
   onCheckIn?: () => void | Promise<void>;
+  contacts?: VoiceCheckInContact[];
 }
 
-export function VoiceCheckIn({ onCheckIn }: VoiceCheckInProps) {
+export function VoiceCheckIn({ onCheckIn, contacts }: VoiceCheckInProps) {
   /** UI/state flags */
   const [isListening, setIsListening] = useState(false);       // mic actively capturing speech
   const [isProcessing, setIsProcessing] = useState(false);     // AI is running
@@ -69,6 +87,48 @@ export function VoiceCheckIn({ onCheckIn }: VoiceCheckInProps) {
   /** We keep the recognition instance in a ref so it persists between renders */
   const recognitionRef = useRef<any | null>(null); // use `any` to avoid TS issues with webkit prefix
   const { toast } = useToast();
+  const [selectedContactKey, setSelectedContactKey] = useState<string | null>(null);
+
+  const contactOptions = useMemo(() => {
+    if (!Array.isArray(contacts) || !contacts.length) return [];
+
+    return contacts
+      .map((contact, index) => {
+        const rawName = (contact?.name ?? "").trim();
+        const displayName = rawName || `Contact ${index + 1}`;
+        const email = contact?.email ? String(contact.email).trim().toLowerCase() : null;
+        const id = contact?.id ? String(contact.id).trim() : null;
+        const key = id || email || `contact-${index}`;
+
+        return {
+          key,
+          name: displayName,
+          payload: {
+            id,
+            email,
+            name: displayName,
+          } as VoiceCheckInContact,
+        };
+      })
+      .filter((option) => option.payload.email || option.payload.id);
+  }, [contacts]);
+
+  useEffect(() => {
+    if (!contactOptions.length) {
+      setSelectedContactKey(null);
+      return;
+    }
+
+    if (!selectedContactKey || !contactOptions.some((option) => option.key === selectedContactKey)) {
+      setSelectedContactKey(contactOptions[0].key);
+    }
+  }, [contactOptions, selectedContactKey]);
+
+  const selectedContact = useMemo(() => {
+    if (!selectedContactKey) return null;
+    const match = contactOptions.find((option) => option.key === selectedContactKey);
+    return match?.payload ?? null;
+  }, [contactOptions, selectedContactKey]);
 
   /** Audio recording helpers so we can send the original clip to emergency contacts */
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
@@ -77,6 +137,11 @@ export function VoiceCheckIn({ onCheckIn }: VoiceCheckInProps) {
   const audioPromiseRef = useRef<Promise<string | null> | null>(null);
   const audioResolveRef = useRef<((value: string | null) => void) | null>(null);
   const lastAudioUrlRef = useRef<string | null>(null);
+  const selectedContactRef = useRef<VoiceCheckInContact | null>(null);
+
+  useEffect(() => {
+    selectedContactRef.current = selectedContact;
+  }, [selectedContact]);
 
   async function blobToDataUrl(blob: Blob): Promise<string> {
     return new Promise((resolve, reject) => {
@@ -308,21 +373,35 @@ export function VoiceCheckIn({ onCheckIn }: VoiceCheckInProps) {
 
         const audioClip = await audioClipPromise;
 
+        const activeContact = selectedContactRef.current;
         try {
           const notifyResult = await notifyEmergencyContacts(
             currentTranscript,
             result,
             audioClip,
+            activeContact,
           );
           const notifiedCount = notifyResult?.contactCount ?? 0;
           const pushInfo = notifyResult?.anomalyPush;
+          const targeted = Boolean(activeContact);
 
-          let description =
-            notifiedCount > 0
-              ? `Shared with ${
-                  notifiedCount === 1 ? "1 emergency contact" : `${notifiedCount} emergency contacts`
-                }.`
-              : "Saved to your emergency dashboard for quick review.";
+          let description: string;
+          if (targeted) {
+            if (notifiedCount > 0) {
+              const contactName = activeContact?.name || "your emergency contact";
+              description = `Shared with ${contactName}.`;
+            } else {
+              const contactName = activeContact?.name || "that contact";
+              description = `${contactName} isn't reachable yet, but we saved your analysis for quick review.`;
+            }
+          } else {
+            description =
+              notifiedCount > 0
+                ? `Shared with ${
+                    notifiedCount === 1 ? "1 emergency contact" : `${notifiedCount} emergency contacts`
+                  }.`
+                : "Saved to your emergency dashboard for quick review.";
+          }
 
           if (result.anomalyDetected && pushInfo?.attempted) {
             const success = pushInfo.successCount ?? 0;
@@ -344,7 +423,9 @@ export function VoiceCheckIn({ onCheckIn }: VoiceCheckInProps) {
           console.error("Failed to notify emergency contacts:", notifyError);
           toast({
             title: "Voice message not delivered",
-            description: "We saved your analysis but couldn't reach your contacts.",
+            description: activeContact
+              ? `We saved your analysis but couldn't reach ${activeContact.name || "your contact"}.`
+              : "We saved your analysis but couldn't reach your contacts.",
             variant: "destructive",
           });
         }
@@ -445,15 +526,45 @@ export function VoiceCheckIn({ onCheckIn }: VoiceCheckInProps) {
   };
 
   const getStatusText = () => {
+    const contactName = selectedContact?.name?.trim();
     if (!supported) return "Speech recognition not supported";
-    if (isListening) return "Listening…";
-    if (isProcessing) return "Analyzing…";
-    if (assessment) return assessment.anomalyDetected ? "Anomaly Detected" : "Check-in Confirmed";
-    return "Ready to listen";
+    if (isListening)
+      return contactName ? `Listening for ${contactName}…` : "Listening…";
+    if (isProcessing)
+      return contactName ? `Analyzing message for ${contactName}…` : "Analyzing…";
+    if (assessment)
+      return assessment.anomalyDetected
+        ? contactName
+          ? `Anomaly detected for ${contactName}`
+          : "Anomaly Detected"
+        : contactName
+        ? `Message ready for ${contactName}`
+        : "Check-in Confirmed";
+    return contactName ? `Ready to message ${contactName}` : "Ready to listen";
   };
 
   return (
     <div className="flex h-full w-full flex-col items-center justify-center gap-6 text-center">
+      {contactOptions.length > 0 && (
+        <div className="flex w-full max-w-xl flex-col items-center gap-3">
+          <p className="text-base font-medium text-muted-foreground">Choose who to notify</p>
+          <div className="flex flex-wrap justify-center gap-2">
+            {contactOptions.map((option) => (
+              <Button
+                key={option.key}
+                type="button"
+                variant={option.key === selectedContactKey ? "default" : "outline"}
+                onClick={() => setSelectedContactKey(option.key)}
+                disabled={isListening || isProcessing}
+                className="min-w-[9rem]"
+              >
+                {option.name}
+              </Button>
+            ))}
+          </div>
+        </div>
+      )}
+
       {/* Visual status circle */}
       <div className="flex h-32 w-32 items-center justify-center rounded-full bg-secondary shadow-inner">
         {getStatusIcon()}

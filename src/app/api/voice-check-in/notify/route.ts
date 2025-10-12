@@ -140,6 +140,27 @@ export async function POST(req: NextRequest) {
 
     const anomalyDetected = Boolean(assessment.anomalyDetected);
 
+    const rawTarget = body?.targetContact as
+      | { id?: unknown; email?: unknown; name?: unknown }
+      | undefined;
+    const targetContactId =
+      rawTarget && typeof rawTarget.id === "string" ? rawTarget.id.trim() : "";
+    const targetContactEmail =
+      rawTarget && typeof rawTarget.email === "string"
+        ? rawTarget.email.trim().toLowerCase()
+        : "";
+    const targetContactName =
+      rawTarget && typeof rawTarget.name === "string" ? rawTarget.name.trim() : "";
+
+    const normalizedTarget =
+      targetContactId || targetContactEmail
+        ? {
+            id: targetContactId || null,
+            email: targetContactEmail || null,
+            name: targetContactName || null,
+          }
+        : null;
+
     const userRef = db.doc(`users/${mainUserUid}`);
     const [contactsSnap, userSnap] = await Promise.all([
       db
@@ -152,6 +173,24 @@ export async function POST(req: NextRequest) {
 
     const userData = userSnap?.exists ? (userSnap.data() as any) : null;
     const mainUserName = buildDisplayName(userData);
+
+    const contactDocs = contactsSnap.docs;
+    const targetedDocs = normalizedTarget
+      ? contactDocs.filter((docSnap) => {
+          const data = docSnap.data() as any;
+          const docEmail =
+            typeof data?.emergencyContactEmail === "string"
+              ? data.emergencyContactEmail.trim().toLowerCase()
+              : "";
+          if (normalizedTarget.id && docSnap.id === normalizedTarget.id) return true;
+          if (normalizedTarget.email && docEmail === normalizedTarget.email) return true;
+          return false;
+        })
+      : contactDocs;
+
+    if (normalizedTarget && targetedDocs.length === 0) {
+      return NextResponse.json({ error: "Target contact not found" }, { status: 404 });
+    }
 
     const batch = db.batch();
 
@@ -168,6 +207,7 @@ export async function POST(req: NextRequest) {
       createdAt: FieldValue.serverTimestamp(),
       expiresAt,
       audioDataUrl: audioDataUrl ?? null,
+      targetContact: normalizedTarget,
     };
 
     batch.set(voiceMessageRef, sharedVoicePayload);
@@ -181,7 +221,7 @@ export async function POST(req: NextRequest) {
       { merge: true }
     );
 
-    contactsSnap.forEach((docSnap) => {
+    targetedDocs.forEach((docSnap) => {
       batch.set(
         docSnap.ref,
         {
@@ -206,7 +246,7 @@ export async function POST(req: NextRequest) {
       pushSummary.attempted = true;
 
       const contactUids = new Set<string>();
-      contactsSnap.forEach((docSnap) => {
+      targetedDocs.forEach((docSnap) => {
         const data = docSnap.data() as any;
         const contactUid = typeof data?.emergencyContactUid === "string" ? data.emergencyContactUid.trim() : "";
         if (contactUid) {
@@ -241,7 +281,7 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    return NextResponse.json({ ok: true, contactCount: contactsSnap.size, anomalyPush: pushSummary });
+    return NextResponse.json({ ok: true, contactCount: targetedDocs.length, anomalyPush: pushSummary });
   } catch (error: any) {
     if (error?.message === "UNAUTHENTICATED") {
       return NextResponse.json({ error: "Unauthenticated" }, { status: 401 });

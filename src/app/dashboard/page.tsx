@@ -18,6 +18,7 @@ import { auth, db } from "@/firebase";
 import { Header } from "@/components/header";
 import { Footer } from "@/components/footer";
 import { VoiceCheckIn } from "@/components/voice-check-in";
+import type { VoiceCheckInContact } from "@/components/voice-check-in";
 import { AskAiAssistant } from "@/components/ask-ai-assistant";
 import { EmergencyContacts } from "@/components/emergency-contact";
 import { useSosDialer } from "@/hooks/useSosDialer";
@@ -96,7 +97,7 @@ const GEO_POSITION_UNAVAILABLE = 2;
 const GEO_TIMEOUT = 3;
 
 const PRIMARY_CARD_BASE_CLASSES =
-  "flex min-h-[20rem] flex-col shadow-lg transition-shadow hover:shadow-xl";
+  "flex min-h-[22rem] flex-col shadow-lg transition-shadow hover:shadow-xl";
 const PRIMARY_CARD_HEADER_CLASSES = "space-y-3 text-center";
 const PRIMARY_CARD_TITLE_CLASSES = "text-3xl font-headline font-semibold";
 const PRIMARY_CARD_DESCRIPTION_CLASSES = "text-lg text-muted-foreground";
@@ -153,6 +154,11 @@ async function ensureGeoAllowed(): Promise<true | false | "prompt"> {
   }
 }
 
+const normalizeEmail = (value?: string | null) => {
+  const trimmed = (value ?? "").trim().toLowerCase();
+  return trimmed.length ? trimmed : null;
+};
+
 /** Call your Cloud Function via the Next proxy. */
 async function triggerServerTelnyxCall(params: {
   to?: string;                 // optional; omit to let server look up ACTIVE EC
@@ -208,10 +214,14 @@ export default function DashboardPage() {
     useState<string | null>(null);
   const [primaryEmergencyContactName, setPrimaryEmergencyContactName] =
     useState<string>("Emergency Contact 1");
+  const [primaryEmergencyContactEmail, setPrimaryEmergencyContactEmail] =
+    useState<string | null>(null);
   const [secondaryEmergencyContactPhone, setSecondaryEmergencyContactPhone] =
     useState<string | null>(null);
   const [secondaryEmergencyContactName, setSecondaryEmergencyContactName] =
     useState<string>("Emergency Contact 2");
+  const [secondaryEmergencyContactEmail, setSecondaryEmergencyContactEmail] =
+    useState<string | null>(null);
   const [savedPhone, setSavedPhone] = useState<string>("");
   const [phoneDraft, setPhoneDraft] = useState<string>("");
   const [phoneSaving, setPhoneSaving] = useState(false);
@@ -375,6 +385,9 @@ export default function DashboardPage() {
               ? sanitizePhone(contacts.contact1_phone)
               : "";
           setPrimaryEmergencyContactPhone(phone || null);
+          const email =
+            typeof contacts.contact1_email === "string" ? contacts.contact1_email : "";
+          setPrimaryEmergencyContactEmail(normalizeEmail(email));
 
           const secondFirst =
             typeof contacts.contact2_firstName === "string"
@@ -394,12 +407,17 @@ export default function DashboardPage() {
               ? sanitizePhone(contacts.contact2_phone)
               : "";
           setSecondaryEmergencyContactPhone(secondPhone || null);
+          const secondEmail =
+            typeof contacts.contact2_email === "string" ? contacts.contact2_email : "";
+          setSecondaryEmergencyContactEmail(normalizeEmail(secondEmail));
         } else {
           setEmergencyServiceCountry(DEFAULT_EMERGENCY_SERVICE_COUNTRY);
           setPrimaryEmergencyContactName("Emergency Contact 1");
           setPrimaryEmergencyContactPhone(null);
+          setPrimaryEmergencyContactEmail(null);
           setSecondaryEmergencyContactName("Emergency Contact 2");
           setSecondaryEmergencyContactPhone(null);
+          setSecondaryEmergencyContactEmail(null);
         }
 
         setUserDocLoaded(true);
@@ -1024,6 +1042,40 @@ export default function DashboardPage() {
     setPhoneDraft(savedPhone);
   }, [savedPhone]);
 
+  const voiceContactOptions = useMemo(() => {
+    const contacts: VoiceCheckInContact[] = [];
+
+    if (primaryEmergencyContactEmail) {
+      contacts.push({
+        name: primaryEmergencyContactName,
+        email: primaryEmergencyContactEmail,
+        id:
+          mainUserUid && primaryEmergencyContactEmail
+            ? `${mainUserUid}_${primaryEmergencyContactEmail}`
+            : null,
+      });
+    }
+
+    if (secondaryEmergencyContactEmail) {
+      contacts.push({
+        name: secondaryEmergencyContactName,
+        email: secondaryEmergencyContactEmail,
+        id:
+          mainUserUid && secondaryEmergencyContactEmail
+            ? `${mainUserUid}_${secondaryEmergencyContactEmail}`
+            : null,
+      });
+    }
+
+    return contacts;
+  }, [
+    mainUserUid,
+    primaryEmergencyContactEmail,
+    primaryEmergencyContactName,
+    secondaryEmergencyContactEmail,
+    secondaryEmergencyContactName,
+  ]);
+
   // Prevent flashing dashboard before role check
   if (!roleChecked) {
     return (
@@ -1053,10 +1105,10 @@ export default function DashboardPage() {
         <h1 className="text-3xl md:text-4xl font-headline font-bold mb-6">Your Dashboard</h1>
         <div className="grid grid-cols-1 gap-6 lg:grid-cols-2 xl:grid-cols-12">
           {/* Primary column */}
-          <div className="grid grid-cols-1 gap-6 sm:grid-cols-2 auto-rows-[minmax(20rem,_1fr)] lg:col-span-1 xl:col-span-7">
+          <div className="grid grid-cols-1 gap-6 sm:grid-cols-2 auto-rows-[minmax(24rem,_1fr)] lg:col-span-1 xl:col-span-7">
             {/* SOS */}
             <Card
-              className={`${PRIMARY_CARD_BASE_CLASSES} aspect-square min-h-0 border border-destructive bg-destructive/10 text-center`}
+              className={`${PRIMARY_CARD_BASE_CLASSES} min-h-[26rem] border border-destructive bg-destructive/10 text-center`}
             >
               <CardHeader className={PRIMARY_CARD_HEADER_CLASSES}>
                 <CardTitle className={`${PRIMARY_CARD_TITLE_CLASSES} text-destructive`}>
@@ -1123,7 +1175,7 @@ export default function DashboardPage() {
             </Card>
 
             {/* Check-in */}
-            <Card className={`${PRIMARY_CARD_BASE_CLASSES} aspect-square min-h-0 text-center`}>
+            <Card className={`${PRIMARY_CARD_BASE_CLASSES} min-h-[28rem] text-center`}>
               <CardHeader className={PRIMARY_CARD_HEADER_CLASSES}>
                 <CardTitle className={PRIMARY_CARD_TITLE_CLASSES}>Check-in</CardTitle>
                 <CardDescription className={PRIMARY_CARD_DESCRIPTION_CLASSES}>
@@ -1201,7 +1253,7 @@ export default function DashboardPage() {
             </Card>
 
             <Card
-              className={`${PRIMARY_CARD_BASE_CLASSES} aspect-square min-h-0 border-2 border-primary/30 text-center`}
+              className={`${PRIMARY_CARD_BASE_CLASSES} min-h-[26rem] border-2 border-primary/30 text-center`}
             >
               <CardHeader className={PRIMARY_CARD_HEADER_CLASSES}>
                 <CardTitle className={PRIMARY_CARD_TITLE_CLASSES}>Ask AI</CardTitle>
@@ -1258,9 +1310,11 @@ export default function DashboardPage() {
                 <div className="flex flex-col items-center gap-4 text-center">
                   <h3 className="text-2xl font-semibold">Send a voice update</h3>
                   <p className="max-w-lg text-base text-muted-foreground">
-                    Hold to record a quick message that we analyze and share with your emergency contacts.
+                    {voiceContactOptions.length
+                      ? "Choose an emergency contact below, then record a quick message that we analyze and share only with them."
+                      : "Add emergency contact emails to send a voice update directly to each person."}
                   </p>
-                  <VoiceCheckIn onCheckIn={handleCheckIn} />
+                  <VoiceCheckIn contacts={voiceContactOptions} onCheckIn={handleCheckIn} />
                 </div>
               </CardContent>
             </Card>
