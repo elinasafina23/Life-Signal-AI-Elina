@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Sparkles, Volume2, VolumeX, Loader2 } from "lucide-react";
+import { Sparkles, Volume2, VolumeX, Loader2, Mic, MicOff } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
@@ -25,106 +25,226 @@ export function AskAiAssistant() {
   const [answer, setAnswer] = useState<string | null>(null);
   const [mood, setMood] = useState<{ mood: string; description?: string } | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [speechSupported, setSpeechSupported] = useState(false);
+  const [speechSynthesisSupported, setSpeechSynthesisSupported] = useState(false);
+  const [speechRecognitionSupported, setSpeechRecognitionSupported] = useState(false);
+  const [voiceSupportChecked, setVoiceSupportChecked] = useState(false);
   const [isSpeaking, setIsSpeaking] = useState(false);
+  const [isListening, setIsListening] = useState(false);
 
   const utteranceRef = useRef<SpeechSynthesisUtterance | null>(null);
+  const recognitionRef = useRef<any | null>(null);
 
-  useEffect(() => {
-    if (typeof window !== "undefined" && "speechSynthesis" in window) {
-      setSpeechSupported(true);
-    }
+  const speak = useCallback(
+    (text: string) => {
+      if (!speechSynthesisSupported || typeof window === "undefined") return;
 
-    return () => {
-      if (typeof window !== "undefined" && "speechSynthesis" in window) {
-        window.speechSynthesis.cancel();
-      }
-    };
-  }, []);
+      const synth = window.speechSynthesis;
+      synth.cancel();
 
-  const speak = useCallback((text: string) => {
-    if (!speechSupported || typeof window === "undefined") return;
+      const utterance = new SpeechSynthesisUtterance(text);
+      utterance.rate = 1;
+      utterance.pitch = 1;
+      utterance.onend = () => {
+        setIsSpeaking(false);
+        utteranceRef.current = null;
+      };
+      utterance.onerror = () => {
+        setIsSpeaking(false);
+        utteranceRef.current = null;
+      };
 
-    const synth = window.speechSynthesis;
-    synth.cancel();
-
-    const utterance = new SpeechSynthesisUtterance(text);
-    utterance.rate = 1;
-    utterance.pitch = 1;
-    utterance.onend = () => {
-      setIsSpeaking(false);
-      utteranceRef.current = null;
-    };
-    utterance.onerror = () => {
-      setIsSpeaking(false);
-      utteranceRef.current = null;
-    };
-
-    utteranceRef.current = utterance;
-    setIsSpeaking(true);
-    synth.speak(utterance);
-  }, [speechSupported]);
+      utteranceRef.current = utterance;
+      setIsSpeaking(true);
+      synth.speak(utterance);
+    },
+    [speechSynthesisSupported],
+  );
 
   const stopSpeaking = useCallback(() => {
-    if (!speechSupported || typeof window === "undefined") return;
+    if (!speechSynthesisSupported || typeof window === "undefined") return;
     window.speechSynthesis.cancel();
     utteranceRef.current = null;
     setIsSpeaking(false);
-  }, [speechSupported]);
+  }, [speechSynthesisSupported]);
 
-  const submitQuestion = useCallback(async () => {
-    const trimmed = question.trim();
-    if (!trimmed) {
-      setError("Ask a question to get started.");
+  const submitQuestion = useCallback(
+    async (rawQuestion: string) => {
+      const trimmed = rawQuestion.trim();
+      if (!trimmed) {
+        setError("Ask a question to get started.");
+        return;
+      }
+
+      setLoading(true);
+      setError(null);
+      setAnswer(null);
+      setMood(null);
+      stopSpeaking();
+
+      try {
+        const response = await fetch("/api/ask-ai", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ question: trimmed }),
+        });
+
+        const data = (await response.json().catch(() => ({}))) as AskAiAssistantResponse & {
+          error?: string;
+        };
+
+        if (!response.ok || data?.error) {
+          throw new Error(data?.error || "The assistant was unable to answer. Please try again.");
+        }
+
+        setAnswer(data.answer);
+        if (data.moodSummary) {
+          setMood({
+            mood: data.moodSummary.mood,
+            description: data.moodSummary.description ?? undefined,
+          });
+        }
+
+        if (data.answer && speechSynthesisSupported) {
+          speak(data.answer);
+        }
+      } catch (err) {
+        console.error("AskAiAssistant failed:", err);
+        const message =
+          err instanceof Error ? err.message : "The assistant encountered an unexpected error.";
+        setError(message);
+        toast({
+          title: "Assistant unavailable",
+          description: message,
+          variant: "destructive",
+        });
+      } finally {
+        setLoading(false);
+      }
+    },
+    [speak, speechSynthesisSupported, stopSpeaking, toast],
+  );
+
+  useEffect(() => {
+    if (typeof window !== "undefined" && "speechSynthesis" in window) {
+      setSpeechSynthesisSupported(true);
+      return () => {
+        window.speechSynthesis.cancel();
+      };
+    }
+
+    setSpeechSynthesisSupported(false);
+    return undefined;
+  }, []);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+
+    const RecognitionCtor: any =
+      (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+
+    if (!RecognitionCtor) {
+      setSpeechRecognitionSupported(false);
+      recognitionRef.current = null;
+      setVoiceSupportChecked(true);
       return;
     }
 
-    setLoading(true);
-    setError(null);
-    setAnswer(null);
-    setMood(null);
-    stopSpeaking();
+    const recognition = new RecognitionCtor();
+    recognition.continuous = false;
+    recognition.lang = "en-US";
+    recognition.interimResults = false;
 
-    try {
-      const response = await fetch("/api/ask-ai", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ question: trimmed }),
-      });
+    recognition.onstart = () => {
+      setIsListening(true);
+      setError(null);
+      stopSpeaking();
+    };
 
-      const data = (await response.json().catch(() => ({}))) as AskAiAssistantResponse & {
-        error?: string;
-      };
-
-      if (!response.ok || data?.error) {
-        throw new Error(data?.error || "The assistant was unable to answer. Please try again.");
-      }
-
-      setAnswer(data.answer);
-      if (data.moodSummary) {
-        setMood({
-          mood: data.moodSummary.mood,
-          description: data.moodSummary.description ?? undefined,
+    recognition.onresult = (event: any) => {
+      const transcript: string = event.results?.[0]?.[0]?.transcript || "";
+      const trimmed = transcript.trim();
+      if (!trimmed) {
+        toast({
+          title: "No speech detected",
+          description: "We couldn't hear your question. Try speaking again.",
+          variant: "destructive",
         });
+        return;
+      }
+      setQuestion(trimmed);
+      void submitQuestion(trimmed);
+      try {
+        recognition.stop();
+      } catch {}
+    };
+
+    recognition.onerror = (event: any) => {
+      const code = event?.error || "unknown";
+      let message = "We couldn't understand the speech input. Please try again.";
+      if (code === "not-allowed" || code === "service-not-allowed") {
+        message = "Microphone access was denied. Enable it in your browser settings.";
+      } else if (code === "no-speech") {
+        message = "No speech detected. Please speak clearly into the microphone.";
+      } else if (code === "audio-capture") {
+        message = "No microphone was found. Check your audio device.";
       }
 
-      if (data.answer && speechSupported) {
-        speak(data.answer);
-      }
-    } catch (err) {
-      console.error("AskAiAssistant failed:", err);
-      const message =
-        err instanceof Error ? err.message : "The assistant encountered an unexpected error.";
-      setError(message);
+      toast({ title: "Voice capture error", description: message, variant: "destructive" });
+      setIsListening(false);
+    };
+
+    recognition.onend = () => {
+      setIsListening(false);
+    };
+
+    recognitionRef.current = recognition;
+    setSpeechRecognitionSupported(true);
+    setVoiceSupportChecked(true);
+
+    return () => {
+      try {
+        recognition.stop();
+      } catch {}
+      recognitionRef.current = null;
+    };
+  }, [stopSpeaking, submitQuestion, toast]);
+
+  const toggleListening = useCallback(() => {
+    if (!speechRecognitionSupported) {
       toast({
-        title: "Assistant unavailable",
-        description: message,
+        title: "Voice input unavailable",
+        description: "Your browser does not support speech recognition.",
         variant: "destructive",
       });
-    } finally {
-      setLoading(false);
+      return;
     }
-  }, [question, speak, speechSupported, stopSpeaking, toast]);
+
+    const recognition = recognitionRef.current;
+    if (!recognition) {
+      toast({
+        title: "Voice input unavailable",
+        description: "We couldn't start voice recognition. Try refreshing the page.",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    try {
+      if (isListening) {
+        recognition.stop();
+      } else {
+        stopSpeaking();
+        recognition.start();
+      }
+    } catch (err) {
+      console.error("Failed to toggle speech recognition", err);
+      toast({
+        title: "Voice input unavailable",
+        description: "We couldn't access your microphone. Check your browser permissions.",
+        variant: "destructive",
+      });
+    }
+  }, [speechRecognitionSupported, isListening, stopSpeaking, toast]);
 
   const canSubmit = useMemo(() => question.trim().length > 0 && !loading, [question, loading]);
 
@@ -145,7 +265,34 @@ export function AskAiAssistant() {
       </div>
 
       <div className="flex flex-wrap items-center gap-3">
-        <Button onClick={submitQuestion} disabled={!canSubmit} size="lg" className="flex-1 sm:flex-initial">
+        {speechRecognitionSupported && (
+          <Button
+            type="button"
+            variant={isListening ? "destructive" : "outline"}
+            onClick={toggleListening}
+            disabled={loading}
+            className="flex-1 sm:flex-initial"
+          >
+            {isListening ? (
+              <>
+                <MicOff className="mr-2 h-5 w-5" aria-hidden />
+                Stop listening
+              </>
+            ) : (
+              <>
+                <Mic className="mr-2 h-5 w-5" aria-hidden />
+                Ask with voice
+              </>
+            )}
+          </Button>
+        )}
+
+        <Button
+          onClick={() => submitQuestion(question)}
+          disabled={!canSubmit}
+          size="lg"
+          className="flex-1 sm:flex-initial"
+        >
           {loading ? (
             <>
               <Loader2 className="mr-2 h-5 w-5 animate-spin" aria-hidden />
@@ -159,7 +306,7 @@ export function AskAiAssistant() {
           )}
         </Button>
 
-        {speechSupported && answer && (
+        {speechSynthesisSupported && answer && (
           <Button
             type="button"
             variant="outline"
@@ -180,6 +327,18 @@ export function AskAiAssistant() {
           </Button>
         )}
       </div>
+
+      {isListening && (
+        <p className="text-sm font-medium text-primary" aria-live="assertive">
+          Listening… ask your question now.
+        </p>
+      )}
+
+      {voiceSupportChecked && !speechRecognitionSupported && (
+        <p className="text-xs text-muted-foreground">
+          Voice questions require a browser with Speech Recognition support (Chrome, Edge, or Safari).
+        </p>
+      )}
 
       {error && <p className="text-sm text-destructive">{error}</p>}
 

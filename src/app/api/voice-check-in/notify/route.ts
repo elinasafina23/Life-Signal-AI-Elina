@@ -110,6 +110,8 @@ export async function POST(req: NextRequest) {
     const transcriptRaw = body?.transcribedSpeech;
     const assessment = body?.assessment as AssessVoiceCheckInOutput | undefined;
     const audioDataUrlRaw = typeof body?.audioDataUrl === "string" ? body.audioDataUrl.trim() : "";
+    const targetRelationRaw = typeof body?.targetRelation === "string" ? body.targetRelation.trim() : "";
+    const targetRelation = targetRelationRaw ? targetRelationRaw.toLowerCase() : null;
     const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000);
 
     let audioDataUrl: string | null = null;
@@ -150,6 +152,16 @@ export async function POST(req: NextRequest) {
       userRef.get().catch(() => null),
     ]);
 
+    const filteredContacts = contactsSnap.docs.filter((docSnap) => {
+      if (!targetRelation) return true;
+      try {
+        const relation = String((docSnap.data() as any)?.relation || "").trim().toLowerCase();
+        return relation === targetRelation;
+      } catch {
+        return false;
+      }
+    });
+
     const userData = userSnap?.exists ? (userSnap.data() as any) : null;
     const mainUserName = buildDisplayName(userData);
 
@@ -168,6 +180,7 @@ export async function POST(req: NextRequest) {
       createdAt: FieldValue.serverTimestamp(),
       expiresAt,
       audioDataUrl: audioDataUrl ?? null,
+      targetRelation: targetRelation ?? null,
     };
 
     batch.set(voiceMessageRef, sharedVoicePayload);
@@ -181,7 +194,7 @@ export async function POST(req: NextRequest) {
       { merge: true }
     );
 
-    contactsSnap.forEach((docSnap) => {
+    filteredContacts.forEach((docSnap) => {
       batch.set(
         docSnap.ref,
         {
@@ -193,6 +206,8 @@ export async function POST(req: NextRequest) {
     });
 
     await batch.commit();
+
+    const contactCount = filteredContacts.length;
 
     const pushSummary = {
       attempted: false,
@@ -206,7 +221,7 @@ export async function POST(req: NextRequest) {
       pushSummary.attempted = true;
 
       const contactUids = new Set<string>();
-      contactsSnap.forEach((docSnap) => {
+      filteredContacts.forEach((docSnap) => {
         const data = docSnap.data() as any;
         const contactUid = typeof data?.emergencyContactUid === "string" ? data.emergencyContactUid.trim() : "";
         if (contactUid) {
@@ -241,7 +256,7 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    return NextResponse.json({ ok: true, contactCount: contactsSnap.size, anomalyPush: pushSummary });
+    return NextResponse.json({ ok: true, contactCount, anomalyPush: pushSummary });
   } catch (error: any) {
     if (error?.message === "UNAUTHENTICATED") {
       return NextResponse.json({ error: "Unauthenticated" }, { status: 401 });

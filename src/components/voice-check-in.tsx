@@ -6,6 +6,7 @@ import { Mic, MicOff, Loader, ShieldAlert, ShieldCheck } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import type { AssessVoiceCheckInOutput } from "@/ai/flows/voice-check-in-assessment";
 import { useToast } from "@/hooks/use-toast";
+import { cn } from "@/lib/utils";
 
 interface NotifyContactsResponse {
   ok: boolean;
@@ -23,6 +24,7 @@ async function notifyEmergencyContacts(
   currentTranscript: string,
   aiAssessment: AssessVoiceCheckInOutput,
   audioDataUrl?: string | null,
+  options?: { targetRelation?: string },
 ): Promise<NotifyContactsResponse> {
   const response = await fetch("/api/voice-check-in/notify", {
     method: "POST",
@@ -33,6 +35,7 @@ async function notifyEmergencyContacts(
       transcribedSpeech: currentTranscript,
       assessment: aiAssessment,
       audioDataUrl,
+      ...(options?.targetRelation ? { targetRelation: options.targetRelation } : {}),
     }),
   });
 
@@ -54,9 +57,17 @@ async function notifyEmergencyContacts(
  */
 export interface VoiceCheckInProps {
   onCheckIn?: () => void | Promise<void>;
+  targetRelation?: string | null;
+  contactLabel?: string | null;
+  className?: string;
 }
 
-export function VoiceCheckIn({ onCheckIn }: VoiceCheckInProps) {
+export function VoiceCheckIn({
+  onCheckIn,
+  targetRelation,
+  contactLabel,
+  className,
+}: VoiceCheckInProps) {
   /** UI/state flags */
   const [isListening, setIsListening] = useState(false);       // mic actively capturing speech
   const [isProcessing, setIsProcessing] = useState(false);     // AI is running
@@ -77,6 +88,26 @@ export function VoiceCheckIn({ onCheckIn }: VoiceCheckInProps) {
   const audioPromiseRef = useRef<Promise<string | null> | null>(null);
   const audioResolveRef = useRef<((value: string | null) => void) | null>(null);
   const lastAudioUrlRef = useRef<string | null>(null);
+
+  const normalizedTargetRelation =
+    typeof targetRelation === "string" && targetRelation.trim().length > 0
+      ? targetRelation.trim().toLowerCase()
+      : "";
+
+  const normalizedContactLabel =
+    typeof contactLabel === "string" && contactLabel.trim().length > 0 ? contactLabel.trim() : "";
+
+  const relationDisplayLabel = normalizedTargetRelation
+    ? `${normalizedTargetRelation.charAt(0).toUpperCase()}${normalizedTargetRelation.slice(1)} emergency contact`
+    : "";
+
+  const targetDisplayLabel = normalizedContactLabel || relationDisplayLabel;
+  const targetToastLabel =
+    normalizedContactLabel ||
+    (normalizedTargetRelation ? `your ${normalizedTargetRelation} emergency contact` : "");
+  const capitalizedTargetToastLabel = targetToastLabel
+    ? targetToastLabel.charAt(0).toUpperCase() + targetToastLabel.slice(1)
+    : "";
 
   async function blobToDataUrl(blob: Blob): Promise<string> {
     return new Promise((resolve, reject) => {
@@ -308,31 +339,46 @@ export function VoiceCheckIn({ onCheckIn }: VoiceCheckInProps) {
 
         const audioClip = await audioClipPromise;
 
+        const hasTargetLabel = Boolean(targetToastLabel);
+
         try {
           const notifyResult = await notifyEmergencyContacts(
             currentTranscript,
             result,
             audioClip,
+            { targetRelation: normalizedTargetRelation || undefined },
           );
           const notifiedCount = notifyResult?.contactCount ?? 0;
           const pushInfo = notifyResult?.anomalyPush;
 
-          let description =
-            notifiedCount > 0
+          let description = "";
+          if (hasTargetLabel) {
+            description = notifiedCount > 0
+              ? `Shared with ${targetToastLabel}.`
+              : `Saved to your emergency dashboard for ${targetToastLabel} to review later.`;
+          } else {
+            description = notifiedCount > 0
               ? `Shared with ${
                   notifiedCount === 1 ? "1 emergency contact" : `${notifiedCount} emergency contacts`
                 }.`
               : "Saved to your emergency dashboard for quick review.";
+          }
 
           if (result.anomalyDetected && pushInfo?.attempted) {
             const success = pushInfo.successCount ?? 0;
             const tokens = pushInfo.tokenCount ?? 0;
             if (success > 0) {
-              description += " Emergency contacts received a push alert about the anomaly.";
+              description += hasTargetLabel
+                ? ` ${capitalizedTargetToastLabel} received a push alert about the anomaly.`
+                : " Emergency contacts received a push alert about the anomaly.";
             } else if (tokens > 0) {
-              description += " We attempted push alerts, but delivery failed. Check contact device registrations.";
+              description += hasTargetLabel
+                ? ` We attempted push alerts, but delivery failed. Ask ${targetToastLabel} to check their device registrations.`
+                : " We attempted push alerts, but delivery failed. Check contact device registrations.";
             } else {
-              description += " None of your emergency contacts have push notifications enabled yet.";
+              description += hasTargetLabel
+                ? ` ${capitalizedTargetToastLabel} does not have push notifications enabled yet.`
+                : " None of your emergency contacts have push notifications enabled yet.";
             }
           }
 
@@ -344,7 +390,9 @@ export function VoiceCheckIn({ onCheckIn }: VoiceCheckInProps) {
           console.error("Failed to notify emergency contacts:", notifyError);
           toast({
             title: "Voice message not delivered",
-            description: "We saved your analysis but couldn't reach your contacts.",
+            description: hasTargetLabel
+              ? `We saved your analysis but couldn't reach ${targetToastLabel}.`
+              : "We saved your analysis but couldn't reach your contacts.",
             variant: "destructive",
           });
         }
@@ -453,7 +501,7 @@ export function VoiceCheckIn({ onCheckIn }: VoiceCheckInProps) {
   };
 
   return (
-    <div className="flex h-full w-full flex-col items-center justify-center gap-6 text-center">
+    <div className={cn("flex h-full w-full flex-col items-center justify-center gap-6 text-center", className)}>
       {/* Visual status circle */}
       <div className="flex h-32 w-32 items-center justify-center rounded-full bg-secondary shadow-inner">
         {getStatusIcon()}
@@ -463,6 +511,12 @@ export function VoiceCheckIn({ onCheckIn }: VoiceCheckInProps) {
       <p className="text-2xl font-semibold text-muted-foreground" aria-live="polite">
         {getStatusText()}
       </p>
+
+      {targetDisplayLabel && (
+        <p className="text-sm font-medium text-primary" aria-live="polite">
+          Sending to {targetDisplayLabel}
+        </p>
+      )}
 
       {/* Show transcript once we have one */}
       {transcript && <p className="text-base text-muted-foreground">You said: “{transcript}”</p>}

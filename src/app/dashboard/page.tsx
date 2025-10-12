@@ -96,7 +96,7 @@ const GEO_POSITION_UNAVAILABLE = 2;
 const GEO_TIMEOUT = 3;
 
 const PRIMARY_CARD_BASE_CLASSES =
-  "flex min-h-[20rem] flex-col shadow-lg transition-shadow hover:shadow-xl";
+  "flex min-h-[24rem] flex-col shadow-lg transition-shadow hover:shadow-xl";
 const PRIMARY_CARD_HEADER_CLASSES = "space-y-3 text-center";
 const PRIMARY_CARD_TITLE_CLASSES = "text-3xl font-headline font-semibold";
 const PRIMARY_CARD_DESCRIPTION_CLASSES = "text-lg text-muted-foreground";
@@ -859,6 +859,31 @@ export default function DashboardPage() {
   const ready = (progress ?? 0) >= 0.999;
   const phoneDirty = sanitizePhone(phoneDraft) !== savedPhone;
 
+  const normalizedPrimaryName = primaryEmergencyContactName?.trim() ?? "";
+  const primaryContactLabel =
+    normalizedPrimaryName && normalizedPrimaryName !== "Emergency Contact 1"
+      ? normalizedPrimaryName
+      : "your primary emergency contact";
+
+  const normalizedSecondaryName = secondaryEmergencyContactName?.trim() ?? "";
+  const secondaryContactNameDisplay =
+    normalizedSecondaryName && normalizedSecondaryName !== "Emergency Contact 2"
+      ? normalizedSecondaryName
+      : "Emergency Contact 2";
+
+  const secondaryContactToastLabel =
+    normalizedSecondaryName && normalizedSecondaryName !== "Emergency Contact 2"
+      ? normalizedSecondaryName
+      : "your secondary emergency contact";
+
+  const secondaryContactConfigured =
+    Boolean(secondaryEmergencyContactPhone) ||
+    (normalizedSecondaryName && normalizedSecondaryName !== "Emergency Contact 2");
+
+  const secondaryVoiceDescription = secondaryContactConfigured
+    ? `Hold the button below to send ${secondaryContactNameDisplay} a voiced update.`
+    : "Add a secondary emergency contact to deliver targeted voice updates.";
+
   useEffect(() => {
     const wasActive = prevEscalationActiveRef.current;
     const isActive = Boolean(escalationActiveAt);
@@ -1053,10 +1078,10 @@ export default function DashboardPage() {
         <h1 className="text-3xl md:text-4xl font-headline font-bold mb-6">Your Dashboard</h1>
         <div className="grid grid-cols-1 gap-6 lg:grid-cols-2 xl:grid-cols-12">
           {/* Primary column */}
-          <div className="grid grid-cols-1 gap-6 sm:grid-cols-2 auto-rows-[minmax(20rem,_1fr)] lg:col-span-1 xl:col-span-7">
+          <div className="grid grid-cols-1 gap-6 sm:grid-cols-2 auto-rows-[minmax(24rem,_1fr)] lg:col-span-1 xl:col-span-7">
             {/* SOS */}
             <Card
-              className={`${PRIMARY_CARD_BASE_CLASSES} aspect-square min-h-0 border border-destructive bg-destructive/10 text-center`}
+              className={`${PRIMARY_CARD_BASE_CLASSES} border border-destructive bg-destructive/10 text-center`}
             >
               <CardHeader className={PRIMARY_CARD_HEADER_CLASSES}>
                 <CardTitle className={`${PRIMARY_CARD_TITLE_CLASSES} text-destructive`}>
@@ -1123,7 +1148,7 @@ export default function DashboardPage() {
             </Card>
 
             {/* Check-in */}
-            <Card className={`${PRIMARY_CARD_BASE_CLASSES} aspect-square min-h-0 text-center`}>
+            <Card className={`${PRIMARY_CARD_BASE_CLASSES} text-center`}>
               <CardHeader className={PRIMARY_CARD_HEADER_CLASSES}>
                 <CardTitle className={PRIMARY_CARD_TITLE_CLASSES}>Check-in</CardTitle>
                 <CardDescription className={PRIMARY_CARD_DESCRIPTION_CLASSES}>
@@ -1200,9 +1225,7 @@ export default function DashboardPage() {
               </CardContent>
             </Card>
 
-            <Card
-              className={`${PRIMARY_CARD_BASE_CLASSES} aspect-square min-h-0 border-2 border-primary/30 text-center`}
-            >
+            <Card className={`${PRIMARY_CARD_BASE_CLASSES} border-2 border-primary/30 text-center`}>
               <CardHeader className={PRIMARY_CARD_HEADER_CLASSES}>
                 <CardTitle className={PRIMARY_CARD_TITLE_CLASSES}>Ask AI</CardTitle>
                 <CardDescription className={PRIMARY_CARD_DESCRIPTION_CLASSES}>
@@ -1255,12 +1278,51 @@ export default function DashboardPage() {
 
                 <Separator className="mx-auto w-24" />
 
-                <div className="flex flex-col items-center gap-4 text-center">
-                  <h3 className="text-2xl font-semibold">Send a voice update</h3>
-                  <p className="max-w-lg text-base text-muted-foreground">
-                    Hold to record a quick message that we analyze and share with your emergency contacts.
-                  </p>
-                  <VoiceCheckIn onCheckIn={handleCheckIn} />
+                <div className="space-y-6 text-left">
+                  <div className="space-y-2 text-center">
+                    <h3 className="text-2xl font-semibold">Send a voice update</h3>
+                    <p className="mx-auto max-w-xl text-base text-muted-foreground">
+                      Hold to record a quick message that we analyze and share with a specific emergency contact.
+                    </p>
+                  </div>
+
+                  <div className="grid gap-4 lg:grid-cols-2">
+                    <div className="flex h-full flex-col gap-4 rounded-lg border border-muted/40 bg-background/80 p-4">
+                      <div className="space-y-1 text-left">
+                        <p className="text-sm font-medium uppercase tracking-wide text-primary/80">Primary contact</p>
+                        <p className="text-xl font-semibold text-foreground">{primaryEmergencyContactName}</p>
+                        <p className="text-sm text-muted-foreground">
+                          Hold the button below to send {primaryContactLabel} a voiced update.
+                        </p>
+                      </div>
+                      <VoiceCheckIn
+                        className="mt-auto"
+                        onCheckIn={handleCheckIn}
+                        targetRelation="primary"
+                        contactLabel={primaryContactLabel}
+                      />
+                    </div>
+
+                    <div className="flex h-full flex-col gap-4 rounded-lg border border-muted/40 bg-background/80 p-4">
+                      <div className="space-y-1 text-left">
+                        <p className="text-sm font-medium uppercase tracking-wide text-primary/80">Secondary contact</p>
+                        <p className="text-xl font-semibold text-foreground">{secondaryEmergencyContactName}</p>
+                        <p className="text-sm text-muted-foreground">{secondaryVoiceDescription}</p>
+                      </div>
+                      {secondaryContactConfigured ? (
+                        <VoiceCheckIn
+                          className="mt-auto"
+                          onCheckIn={handleCheckIn}
+                          targetRelation="secondary"
+                          contactLabel={secondaryContactToastLabel}
+                        />
+                      ) : (
+                        <div className="mt-auto rounded-md border border-dashed border-muted-foreground/40 p-4 text-sm text-muted-foreground">
+                          Invite a secondary emergency contact from your settings to unlock this quick voice update option.
+                        </div>
+                      )}
+                    </div>
+                  </div>
                 </div>
               </CardContent>
             </Card>
