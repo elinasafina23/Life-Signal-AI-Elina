@@ -97,7 +97,7 @@ const GEO_POSITION_UNAVAILABLE = 2;
 const GEO_TIMEOUT = 3;
 
 const PRIMARY_CARD_BASE_CLASSES =
-  "flex min-h-[22rem] flex-col shadow-lg transition-shadow hover:shadow-xl";
+  "flex min-h-[20rem] flex-col shadow-lg transition-shadow hover:shadow-xl";
 const PRIMARY_CARD_HEADER_CLASSES = "space-y-3 text-center";
 const PRIMARY_CARD_TITLE_CLASSES = "text-3xl font-headline font-semibold";
 const PRIMARY_CARD_DESCRIPTION_CLASSES = "text-lg text-muted-foreground";
@@ -1105,10 +1105,10 @@ export default function DashboardPage() {
         <h1 className="text-3xl md:text-4xl font-headline font-bold mb-6">Your Dashboard</h1>
         <div className="grid grid-cols-1 gap-6 lg:grid-cols-2 xl:grid-cols-12">
           {/* Primary column */}
-          <div className="grid grid-cols-1 gap-6 sm:grid-cols-2 auto-rows-[minmax(24rem,_1fr)] lg:col-span-1 xl:col-span-7">
+          <div className="grid grid-cols-1 gap-6 sm:grid-cols-2 auto-rows-[minmax(22rem,_1fr)] lg:col-span-1 xl:col-span-7">
             {/* SOS */}
             <Card
-              className={`${PRIMARY_CARD_BASE_CLASSES} min-h-[26rem] border border-destructive bg-destructive/10 text-center`}
+              className={`${PRIMARY_CARD_BASE_CLASSES} min-h-[22rem] border border-destructive bg-destructive/10 text-center`}
             >
               <CardHeader className={PRIMARY_CARD_HEADER_CLASSES}>
                 <CardTitle className={`${PRIMARY_CARD_TITLE_CLASSES} text-destructive`}>
@@ -1175,7 +1175,7 @@ export default function DashboardPage() {
             </Card>
 
             {/* Check-in */}
-            <Card className={`${PRIMARY_CARD_BASE_CLASSES} min-h-[28rem] text-center`}>
+            <Card className={`${PRIMARY_CARD_BASE_CLASSES} min-h-[24rem] text-center`}>
               <CardHeader className={PRIMARY_CARD_HEADER_CLASSES}>
                 <CardTitle className={PRIMARY_CARD_TITLE_CLASSES}>Check-in</CardTitle>
                 <CardDescription className={PRIMARY_CARD_DESCRIPTION_CLASSES}>
