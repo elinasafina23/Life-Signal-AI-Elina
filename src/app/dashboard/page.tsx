@@ -53,6 +53,7 @@ import {
   DialogDescription,
   DialogHeader,
   DialogTitle,
+  DialogTrigger,
 } from "@/components/ui/dialog";
 import { useToast } from "@/hooks/use-toast";
 
@@ -166,6 +167,122 @@ const normalizeEmail = (value?: string | null) => {
   return trimmed.length ? trimmed : null;
 };
 
+interface VoiceMessageActionProps {
+  contact: VoiceCheckInContact | null;
+  contacts: VoiceCheckInContact[];
+  onCheckIn?: () => void | Promise<void>;
+  buttonClassName?: string;
+}
+
+function VoiceMessageAction({
+  contact,
+  contacts,
+  onCheckIn,
+  buttonClassName,
+}: VoiceMessageActionProps) {
+  const [open, setOpen] = useState(false);
+
+  useEffect(() => {
+    if (!contact && open) {
+      setOpen(false);
+    }
+  }, [contact, open]);
+
+  const handleOpenChange = useCallback(
+    (nextOpen: boolean) => {
+      if (nextOpen && !contact) {
+        setOpen(false);
+        return;
+      }
+      setOpen(nextOpen);
+    },
+    [contact],
+  );
+
+  const handleTriggerClick = useCallback(
+    (event: React.MouseEvent<HTMLButtonElement>) => {
+      if (!contact) {
+        event.preventDefault();
+        return;
+      }
+      setOpen(true);
+    },
+    [contact],
+  );
+
+  const handleVoiceCheckIn = useCallback(async () => {
+    try {
+      if (onCheckIn) {
+        await onCheckIn();
+      }
+    } finally {
+      setOpen(false);
+    }
+  }, [onCheckIn]);
+
+  const effectiveContacts = useMemo(() => {
+    if (!contact) return contacts;
+
+    const contactEmail = contact.email?.trim().toLowerCase();
+    const contactId = contact.id ? String(contact.id).trim() : null;
+
+    const alreadyIncluded = contacts.some((existing) => {
+      const existingEmail = existing.email?.trim().toLowerCase();
+      const existingId = existing.id ? String(existing.id).trim() : null;
+
+      if (contactEmail && existingEmail === contactEmail) return true;
+      if (contactId && existingId === contactId) return true;
+      return false;
+    });
+
+    return alreadyIncluded ? contacts : [contact, ...contacts];
+  }, [contact, contacts]);
+
+  return (
+    <Dialog open={open} onOpenChange={handleOpenChange}>
+      <DialogTrigger asChild>
+        <Button
+          type="button"
+          variant="secondary"
+          onClick={handleTriggerClick}
+          disabled={!contact}
+          className={buttonClassName}
+        >
+          <Mic className="mr-2 h-4 w-4" aria-hidden />
+          Voice message
+        </Button>
+      </DialogTrigger>
+      <DialogContent className="sm:max-w-[520px]">
+        <DialogHeader>
+          <DialogTitle>
+            {contact?.name?.trim()
+              ? `Send a voice message to ${contact.name.trim()}`
+              : "Send a voice message"}
+          </DialogTitle>
+          <DialogDescription>
+            {contact
+              ? `Record a quick update and we'll analyze it before sharing with ${
+                  contact.name?.trim() || "your emergency contact"
+                }.`
+              : "Record a quick update and we'll analyze it before sharing with your emergency contact."}
+          </DialogDescription>
+        </DialogHeader>
+        {contact ? (
+          <VoiceCheckIn
+            contacts={effectiveContacts}
+            targetContact={contact}
+            onCheckIn={handleVoiceCheckIn}
+          />
+        ) : (
+          <p className="text-sm text-muted-foreground">
+            Select an emergency contact to send a voice message.
+          </p>
+        )}
+      </DialogContent>
+    </Dialog>
+  );
+}
+
 /** Call your Cloud Function via the Next proxy. */
 async function triggerServerTelnyxCall(params: {
   to?: string;                 // optional; omit to let server look up ACTIVE EC
@@ -229,9 +346,6 @@ export default function DashboardPage() {
     useState<string>("Emergency Contact 2");
   const [secondaryEmergencyContactEmail, setSecondaryEmergencyContactEmail] =
     useState<string | null>(null);
-  const [voiceMessageDialogOpen, setVoiceMessageDialogOpen] = useState(false);
-  const [voiceMessageDialogContact, setVoiceMessageDialogContact] =
-    useState<VoiceCheckInContact | null>(null);
   const [savedPhone, setSavedPhone] = useState<string>("");
   const [phoneDraft, setPhoneDraft] = useState<string>("");
   const [phoneSaving, setPhoneSaving] = useState(false);
@@ -1052,28 +1166,6 @@ export default function DashboardPage() {
     setPhoneDraft(savedPhone);
   }, [savedPhone]);
 
-  const handleOpenVoiceMessageDialog = useCallback((contact: VoiceCheckInContact | null) => {
-    if (!contact) return;
-    setVoiceMessageDialogContact(contact);
-    setVoiceMessageDialogOpen(true);
-  }, []);
-
-  const handleVoiceMessageDialogChange = useCallback((open: boolean) => {
-    setVoiceMessageDialogOpen(open);
-    if (!open) {
-      setVoiceMessageDialogContact(null);
-    }
-  }, []);
-
-  const handleVoiceMessageCheckIn = useCallback(async () => {
-    try {
-      await handleCheckIn();
-    } finally {
-      setVoiceMessageDialogOpen(false);
-      setVoiceMessageDialogContact(null);
-    }
-  }, [handleCheckIn]);
-
   const primaryVoiceContact = useMemo<VoiceCheckInContact | null>(() => {
     if (!primaryEmergencyContactEmail) return null;
     return {
@@ -1323,16 +1415,12 @@ export default function DashboardPage() {
                       >
                         Call
                       </Button>
-                      <Button
-                        type="button"
-                        variant="secondary"
-                        onClick={() => handleOpenVoiceMessageDialog(primaryVoiceContact)}
-                        disabled={!primaryVoiceContact}
-                        className="w-full"
-                      >
-                        <Mic className="mr-2 h-4 w-4" aria-hidden />
-                        Voice message
-                      </Button>
+                      <VoiceMessageAction
+                        contact={primaryVoiceContact}
+                        contacts={voiceContactOptions}
+                        onCheckIn={handleCheckIn}
+                        buttonClassName="w-full"
+                      />
                     </div>
                   </div>
                   <div className="rounded-lg border p-4">
@@ -1355,16 +1443,12 @@ export default function DashboardPage() {
                       >
                         Call
                       </Button>
-                      <Button
-                        type="button"
-                        variant="secondary"
-                        onClick={() => handleOpenVoiceMessageDialog(secondaryVoiceContact)}
-                        disabled={!secondaryVoiceContact}
-                        className="w-full"
-                      >
-                        <Mic className="mr-2 h-4 w-4" aria-hidden />
-                        Voice message
-                      </Button>
+                      <VoiceMessageAction
+                        contact={secondaryVoiceContact}
+                        contacts={voiceContactOptions}
+                        onCheckIn={handleCheckIn}
+                        buttonClassName="w-full"
+                      />
                     </div>
                   </div>
                 </div>
@@ -1541,31 +1625,6 @@ export default function DashboardPage() {
         </div>
       </main>
       <Footer />
-      <Dialog open={voiceMessageDialogOpen} onOpenChange={handleVoiceMessageDialogChange}>
-        <DialogContent className="sm:max-w-[520px]">
-          <DialogHeader>
-            <DialogTitle>Send a voice message</DialogTitle>
-            <DialogDescription>
-              {voiceMessageDialogContact
-                ? `Record a quick update and we'll analyze it before sharing with ${
-                    voiceMessageDialogContact.name || "your emergency contact"
-                  }.`
-                : "Record a quick update and we'll analyze it before sharing with your emergency contact."}
-            </DialogDescription>
-          </DialogHeader>
-          {voiceMessageDialogContact ? (
-            <VoiceCheckIn
-              contacts={voiceContactOptions}
-              targetContact={voiceMessageDialogContact}
-              onCheckIn={handleVoiceMessageCheckIn}
-            />
-          ) : (
-            <p className="text-sm text-muted-foreground">
-              Select an emergency contact to send a voice message.
-            </p>
-          )}
-        </DialogContent>
-      </Dialog>
     </div>
   );
 }
