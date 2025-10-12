@@ -3,6 +3,7 @@ export const dynamic = "force-dynamic";
 
 import { NextRequest, NextResponse } from "next/server";
 import { FieldValue } from "firebase-admin/firestore";
+import { getMessaging } from "firebase-admin/messaging";
 
 import { adminAuth, db } from "@/lib/firebaseAdmin";
 import { isMainUserRole, normalizeRole } from "@/lib/roles";
@@ -34,6 +35,73 @@ async function requireMainUser(req: NextRequest) {
   return { uid: decoded.uid as string };
 }
 
+function buildDisplayName(data: any | undefined | null): string {
+  if (!data || typeof data !== "object") return "";
+  const direct =
+    typeof data.displayName === "string" && data.displayName.trim().length > 0
+      ? data.displayName.trim()
+      : "";
+  if (direct) return direct;
+
+  const first = typeof data.firstName === "string" ? data.firstName.trim() : "";
+  const last = typeof data.lastName === "string" ? data.lastName.trim() : "";
+  const combined = `${first} ${last}`.trim();
+  if (combined) return combined;
+
+  const fallback = typeof data.name === "string" ? data.name.trim() : "";
+  return fallback;
+}
+
+async function getFcmTokensForUser(uid: string): Promise<string[]> {
+  try {
+    const snap = await db.collection(`users/${uid}/devices`).get();
+    const tokens = new Set<string>();
+    snap.forEach((doc) => {
+      const data = doc.data() as any;
+      const token = String(data?.fcmToken || data?.token || "").trim();
+      const disabled = Boolean(data?.disabled);
+      if (!disabled && token) {
+        tokens.add(token);
+      }
+    });
+    return Array.from(tokens);
+  } catch (error) {
+    console.error(`[voice-check-in notify] failed to load device tokens for ${uid}:`, error);
+    return [];
+  }
+}
+
+async function sendPushToTokens(
+  tokens: string[],
+  notif: { title: string; body: string },
+  data: Record<string, string>,
+): Promise<{ successCount: number; failureCount: number } | null> {
+  const uniqueTokens = Array.from(new Set(tokens.filter((token) => typeof token === "string" && token.trim())));
+  if (!uniqueTokens.length) return null;
+
+  try {
+    const messaging = getMessaging();
+    const response = await messaging.sendEachForMulticast({
+      tokens: uniqueTokens,
+      notification: {
+        title: notif.title,
+        body: notif.body,
+      },
+      data,
+      android: { priority: "high" },
+      apns: {
+        headers: { "apns-priority": "10" },
+        payload: { aps: { sound: "default" } },
+      },
+    });
+
+    return { successCount: response.successCount, failureCount: response.failureCount };
+  } catch (error) {
+    console.error("[voice-check-in notify] push delivery failed:", error);
+    return null;
+  }
+}
+
 export async function POST(req: NextRequest) {
   try {
     const { uid: mainUserUid } = await requireMainUser(req);
@@ -58,11 +126,18 @@ export async function POST(req: NextRequest) {
 
     const anomalyDetected = Boolean(assessment.anomalyDetected);
 
-    const contactsSnap = await db
-      .collection("emergencyContacts")
-      .where("mainUserUid", "==", mainUserUid)
-      .where("status", "==", "ACTIVE")
-      .get();
+    const userRef = db.doc(`users/${mainUserUid}`);
+    const [contactsSnap, userSnap] = await Promise.all([
+      db
+        .collection("emergencyContacts")
+        .where("mainUserUid", "==", mainUserUid)
+        .where("status", "==", "ACTIVE")
+        .get(),
+      userRef.get().catch(() => null),
+    ]);
+
+    const userData = userSnap?.exists ? (userSnap.data() as any) : null;
+    const mainUserName = buildDisplayName(userData);
 
     const batch = db.batch();
 
@@ -79,7 +154,6 @@ export async function POST(req: NextRequest) {
       createdAt: FieldValue.serverTimestamp(),
     });
 
-    const userRef = db.doc(`users/${mainUserUid}`);
     batch.set(
       userRef,
       {
@@ -112,7 +186,54 @@ export async function POST(req: NextRequest) {
 
     await batch.commit();
 
-    return NextResponse.json({ ok: true, contactCount: contactsSnap.size });
+    const pushSummary = {
+      attempted: false,
+      contactUidCount: 0,
+      tokenCount: 0,
+      successCount: 0,
+      failureCount: 0,
+    };
+
+    if (anomalyDetected) {
+      pushSummary.attempted = true;
+
+      const contactUids = new Set<string>();
+      contactsSnap.forEach((docSnap) => {
+        const data = docSnap.data() as any;
+        const contactUid = typeof data?.emergencyContactUid === "string" ? data.emergencyContactUid.trim() : "";
+        if (contactUid) {
+          contactUids.add(contactUid);
+        }
+      });
+
+      pushSummary.contactUidCount = contactUids.size;
+
+      if (contactUids.size) {
+        const tokenArrays = await Promise.all(Array.from(contactUids).map((uid) => getFcmTokensForUser(uid)));
+        const tokens = Array.from(new Set(tokenArrays.flat()));
+        pushSummary.tokenCount = tokens.length;
+
+        const nameForAlert = mainUserName || "your loved one";
+        const notifBody = mainUserName
+          ? `${mainUserName}'s voice check-in sounded unusual. Tap to review the AI summary.`
+          : "A voice check-in sounded unusual. Tap to review the AI summary.";
+
+        const pushResult = await sendPushToTokens(tokens, { title: "Life Signal alert", body: notifBody }, {
+          type: "voice_check_in_anomaly",
+          mainUserUid,
+          anomalyDetected: "true",
+          voiceMessageId: voiceMessageRef.id,
+          name: nameForAlert,
+        });
+
+        if (pushResult) {
+          pushSummary.successCount = pushResult.successCount;
+          pushSummary.failureCount = pushResult.failureCount;
+        }
+      }
+    }
+
+    return NextResponse.json({ ok: true, contactCount: contactsSnap.size, anomalyPush: pushSummary });
   } catch (error: any) {
     if (error?.message === "UNAUTHENTICATED") {
       return NextResponse.json({ error: "Unauthenticated" }, { status: 401 });
