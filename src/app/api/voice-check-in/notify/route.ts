@@ -110,7 +110,6 @@ export async function POST(req: NextRequest) {
     const transcriptRaw = body?.transcribedSpeech;
     const assessment = body?.assessment as AssessVoiceCheckInOutput | undefined;
     const audioDataUrlRaw = typeof body?.audioDataUrl === "string" ? body.audioDataUrl.trim() : "";
-    const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000);
 
     let audioDataUrl: string | null = null;
     if (audioDataUrlRaw) {
@@ -166,7 +165,6 @@ export async function POST(req: NextRequest) {
       explanation,
       anomalyDetected,
       createdAt: FieldValue.serverTimestamp(),
-      expiresAt,
       audioDataUrl: audioDataUrl ?? null,
     };
 

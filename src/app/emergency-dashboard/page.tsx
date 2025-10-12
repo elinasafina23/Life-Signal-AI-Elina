@@ -82,7 +82,6 @@ export type MainUserCard = {
     explanation: string;
     anomalyDetected: boolean;
     createdAt: Date | null;
-    expiresAt: Date | null;
     audioUrl?: string | null;
   } | null;
 };
@@ -106,7 +105,6 @@ export type MainUserDoc = {
     explanation?: string;
     anomalyDetected?: boolean;
     createdAt?: Timestamp;
-    expiresAt?: Timestamp | Date | string | number | null;
     audioDataUrl?: string;
   };
 };
@@ -439,7 +437,6 @@ export default function EmergencyDashboardPage() {
 
                 const rawVoice = (userData as any)?.latestVoiceMessage;
                 const latestVoiceCreatedAt = toDateOrNull(rawVoice?.createdAt);
-                const latestVoiceExpiresAt = toDateOrNull(rawVoice?.expiresAt);
                 let latestVoiceMessage = rawVoice
                   ? {
                       transcript:
@@ -448,7 +445,6 @@ export default function EmergencyDashboardPage() {
                         typeof rawVoice?.explanation === "string" ? rawVoice.explanation : "",
                       anomalyDetected: Boolean(rawVoice?.anomalyDetected),
                       createdAt: latestVoiceCreatedAt,
-                      expiresAt: latestVoiceExpiresAt,
                       audioUrl:
                         typeof rawVoice?.audioDataUrl === "string" && rawVoice.audioDataUrl.trim()
                           ? rawVoice.audioDataUrl
@@ -463,13 +459,6 @@ export default function EmergencyDashboardPage() {
                   !latestVoiceMessage.transcript &&
                   !latestVoiceMessage.explanation &&
                   !latestVoiceMessage.audioUrl
-                ) {
-                  latestVoiceMessage = null;
-                }
-
-                if (
-                  latestVoiceMessage?.expiresAt &&
-                  latestVoiceMessage.expiresAt.getTime() <= Date.now()
                 ) {
                   latestVoiceMessage = null;
                 }
