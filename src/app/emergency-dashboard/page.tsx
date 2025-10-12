@@ -42,6 +42,8 @@ import {
   Settings as SettingsIcon,
   ShieldAlert,
   ShieldCheck,
+  Play,
+  Pause,
 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 
@@ -80,6 +82,7 @@ export type MainUserCard = {
     explanation: string;
     anomalyDetected: boolean;
     createdAt: Date | null;
+    audioUrl?: string | null;
   } | null;
 };
 
@@ -102,6 +105,7 @@ export type MainUserDoc = {
     explanation?: string;
     anomalyDetected?: boolean;
     createdAt?: Timestamp;
+    audioDataUrl?: string;
   };
 };
 
@@ -193,6 +197,85 @@ export default function EmergencyDashboardPage() {
 
   // centered popup when location is missing
   const [noLocationUser, setNoLocationUser] = useState<MainUserCard | null>(null);
+
+  // audio playback state for recorded voice messages
+  const audioRefs = useRef<Record<string, HTMLAudioElement | null>>({});
+  const [playingUid, setPlayingUid] = useState<string | null>(null);
+
+  useEffect(() => {
+    return () => {
+      Object.values(audioRefs.current).forEach((audio) => {
+        try {
+          audio?.pause();
+        } catch {}
+      });
+      audioRefs.current = {};
+    };
+  }, []);
+
+  const registerAudioRef = (uid: string) => (element: HTMLAudioElement | null) => {
+    const previous = audioRefs.current[uid];
+    if (previous && previous !== element) {
+      previous.onended = null;
+      previous.onpause = null;
+    }
+
+    if (element) {
+      element.onended = () => {
+        setPlayingUid((prev) => (prev === uid ? null : prev));
+        try {
+          element.currentTime = 0;
+        } catch {}
+      };
+      element.onpause = () => {
+        setPlayingUid((prev) => (prev === uid ? null : prev));
+      };
+      audioRefs.current[uid] = element;
+    } else {
+      delete audioRefs.current[uid];
+    }
+  };
+
+  async function handleToggleAudioPlayback(uid: string, displayName: string) {
+    const audioEl = audioRefs.current[uid];
+    if (!audioEl) {
+      toast({
+        title: "No recording available",
+        description: `${displayName} did not attach an audio clip with their last check-in.`,
+      });
+      return;
+    }
+
+    if (playingUid && playingUid !== uid) {
+      const current = audioRefs.current[playingUid];
+      try {
+        current?.pause();
+        if (current) current.currentTime = 0;
+      } catch {}
+    }
+
+    if (playingUid === uid && !audioEl.paused) {
+      audioEl.pause();
+      audioEl.currentTime = 0;
+      setPlayingUid(null);
+      return;
+    }
+
+    try {
+      audioEl.currentTime = 0;
+      await audioEl.play();
+      setPlayingUid(uid);
+    } catch (error) {
+      console.error(`[Emergency Dashboard] Playback failed for ${uid}:`, error);
+      setPlayingUid(null);
+      toast({
+        title: "Playback blocked",
+        description:
+          "Your browser could not start audio playback. Try pressing the play button again after interacting with the page.",
+        variant: "destructive",
+      });
+    }
+  }
 
   // keep all active unsubscribers here
   const unsubsRef = useRef<Record<string, Unsubscribe>>({});
@@ -337,13 +420,20 @@ export default function EmergencyDashboardPage() {
                         rawVoice?.createdAt instanceof Timestamp
                           ? rawVoice.createdAt.toDate()
                           : null,
+                      audioUrl:
+                        typeof rawVoice?.audioDataUrl === "string" && rawVoice.audioDataUrl.trim()
+                          ? rawVoice.audioDataUrl
+                          : typeof rawVoice?.audioUrl === "string" && rawVoice.audioUrl.trim()
+                          ? rawVoice.audioUrl
+                          : null,
                     }
                   : null;
 
                 if (
                   latestVoiceMessage &&
                   !latestVoiceMessage.transcript &&
-                  !latestVoiceMessage.explanation
+                  !latestVoiceMessage.explanation &&
+                  !latestVoiceMessage.audioUrl
                 ) {
                   latestVoiceMessage = null;
                 }
@@ -555,6 +645,39 @@ export default function EmergencyDashboardPage() {
                         <p className="text-sm leading-relaxed">
                           {p.latestVoiceMessage.explanation}
                         </p>
+                      )}
+                      {p.latestVoiceMessage.audioUrl && (
+                        <div className="flex flex-wrap items-center gap-3 pt-1">
+                          <Button
+                            variant="secondary"
+                            size="sm"
+                            onClick={() => handleToggleAudioPlayback(p.mainUserUid, p.name)}
+                            aria-label={
+                              playingUid === p.mainUserUid
+                                ? `Stop ${p.name}'s voice message`
+                                : `Play ${p.name}'s voice message`
+                            }
+                          >
+                            {playingUid === p.mainUserUid ? (
+                              <Pause className="mr-2 h-4 w-4" aria-hidden />
+                            ) : (
+                              <Play className="mr-2 h-4 w-4" aria-hidden />
+                            )}
+                            {playingUid === p.mainUserUid ? "Stop message" : "Play message"}
+                          </Button>
+                          <span className="text-xs text-muted-foreground">
+                            {playingUid === p.mainUserUid
+                              ? "Playing the original recording…"
+                              : "Hear the original voice message."}
+                          </span>
+                          <audio
+                            ref={registerAudioRef(p.mainUserUid)}
+                            src={p.latestVoiceMessage.audioUrl ?? undefined}
+                            preload="metadata"
+                            className="hidden"
+                            aria-hidden="true"
+                          />
+                        </div>
                       )}
                     </div>
                   )}
