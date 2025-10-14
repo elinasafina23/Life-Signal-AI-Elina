@@ -79,7 +79,7 @@ interface EmergencyContactsData {
 
 interface UserDoc {
   lastCheckinAt?: Timestamp;
-  checkinInterval?: number | string; // minutes
+  checkinInterval?: number | string;
   locationSharing?: boolean;
   sosTriggeredAt?: Timestamp;
   role?: string;
@@ -98,6 +98,9 @@ type VoiceMessageTarget = {
   email?: string | null;
   phone?: string | null;
 };
+
+// Route alias
+const EMERGENCY_DASH = "/emergency-dashboard";
 
 // helper to compute minutes-since-epoch
 const toEpochMinutes = (ms: number) => Math.floor(ms / 60000);
@@ -172,10 +175,8 @@ async function triggerServerTelnyxCall(params: {
   mainUserUid?: string;
   emergencyContactUid?: string;
 }) {
-  // Always use proxy to avoid CORS; your function URL is hidden behind it.
   const url = "/api/sos/call-server";
 
-  // Forward Firebase ID token if available (in case you verify on CF side)
   let authHeader: Record<string, string> = {};
   try {
     const token = await auth.currentUser?.getIdToken();
@@ -206,6 +207,7 @@ export default function DashboardPage() {
   const [intervalMinutes, setIntervalMinutes] = useState<number>(12 * 60); // default 12h
   const [status, setStatus] = useState<Status>("unknown");
   const [timeLeft, setTimeLeft] = useState<string>("");
+
   const [locationSharing, setLocationSharing] = useState<boolean | null>(null);
   const [locationShareReason, setLocationShareReason] = useState<LocationShareReason | null>(null);
   const [locationSharedAt, setLocationSharedAt] = useState<Date | null>(null);
@@ -213,8 +215,10 @@ export default function DashboardPage() {
   const [locationMutationPending, setLocationMutationPending] = useState(false);
   const [clearingLocation, setClearingLocation] = useState(false);
   const [sharingLocation, setSharingLocation] = useState(false);
+
   const [roleChecked, setRoleChecked] = useState(false);
   const [userDocLoaded, setUserDocLoaded] = useState(false);
+
   const [emergencyServiceCountry, setEmergencyServiceCountry] =
     useState<EmergencyServiceCountryCode>(DEFAULT_EMERGENCY_SERVICE_COUNTRY);
   const [primaryEmergencyContactPhone, setPrimaryEmergencyContactPhone] =
@@ -229,14 +233,15 @@ export default function DashboardPage() {
     useState<string | null>(null);
   const [secondaryEmergencyContactName, setSecondaryEmergencyContactName] =
     useState<string>("Emergency Contact 2");
+
   const [savedPhone, setSavedPhone] = useState<string>("");
   const [phoneDraft, setPhoneDraft] = useState<string>("");
   const [phoneSaving, setPhoneSaving] = useState(false);
+
   const [voiceMessageTarget, setVoiceMessageTarget] =
     useState<VoiceMessageTarget | null>(null);
   const [quickVoiceDialogOpen, setQuickVoiceDialogOpen] = useState(false);
 
-  // 👇 explicit main user UID
   const [mainUserUid, setMainUserUid] = useState<string | null>(null);
 
   const userDocUnsubRef = useRef<(() => void) | null>(null);
@@ -245,7 +250,7 @@ export default function DashboardPage() {
   const lastLocationShareRef = useRef<{ reason: LocationShareReason; ts: number } | null>(null);
   const prevEscalationActiveRef = useRef(false);
 
-  // Push notifications while app is open
+  // Foreground push messages while app is open
   useEffect(() => {
     let unsub: (() => void) | undefined;
 
@@ -279,7 +284,7 @@ export default function DashboardPage() {
     return () => unsub?.();
   }, []);
 
-  // 🔑 Auth + Firestore subscription
+  // Auth + user doc subscription
   useEffect(() => {
     const offAuth = onAuthStateChanged(auth, async (user) => {
       if (userDocUnsubRef.current) {
@@ -327,14 +332,15 @@ export default function DashboardPage() {
         }
         const data = snap.data() as UserDoc;
 
-        // 🚫 Prevent emergency contacts from seeing this dashboard
+        // mark checked before redirect to avoid flicker
+        setRoleChecked(true);
+
+        // prevent emergency contacts from seeing main dashboard
         const r = normalizeRole(data.role);
         if (r === "emergency_contact") {
-          router.replace("/emergency-dashboard");
+          router.replace(EMERGENCY_DASH);
           return;
         }
-
-        setRoleChecked(true);
 
         if (data.lastCheckinAt instanceof Timestamp) {
           setLastCheckIn(data.lastCheckinAt.toDate());
@@ -515,7 +521,6 @@ export default function DashboardPage() {
     return () => clearInterval(id);
   }, [nextCheckIn]);
 
-  // --- UI helpers ---
   const formatWhen = (d: Date | null) => {
     if (!d) return "—";
     const now = new Date();
@@ -851,7 +856,6 @@ export default function DashboardPage() {
       });
     }
 
-    // 2) Server-side Telnyx call (does NOT affect scheduled escalation)
     if (primaryEmergencyContactPhone) {
       try {
         await triggerServerTelnyxCall({
@@ -885,7 +889,6 @@ export default function DashboardPage() {
     primaryEmergencyContactName,
   ]);
 
-  // Hook for hold-to-call (device dialer)
   const { bind, holding, progress } = useSosDialer({
     phoneNumber: emergencyService.dial,
     contactName: `Emergency services (${emergencyService.dial})`,
@@ -894,7 +897,6 @@ export default function DashboardPage() {
     onActivate: triggerSos,
   });
 
-  // Local "ready" derived from progress (hook returns 0..1)
   const ready = (progress ?? 0) >= 0.999;
   const phoneDirty = sanitizePhone(phoneDraft) !== savedPhone;
 
@@ -1017,7 +1019,7 @@ export default function DashboardPage() {
     });
   }, [handleCheckIn, mainUserUid, roleChecked, userDocLoaded]);
 
-  // Update interval + recompute dueAtMin
+  // Map minutes → hours option for the Select
   const selectedHours = useMemo(() => {
     const h = Math.round(intervalMinutes / 60);
     const isValidOption = HOURS_OPTIONS.some((option) => option === h);
@@ -1053,6 +1055,8 @@ export default function DashboardPage() {
   };
 
   const handlePhoneSave = useCallback(async () => {
+    // NOTE: This function saves only on explicit user click. We also blur the button
+    // in finally{} to ensure its visual state returns to normal after the click.
     if (!userRef.current) {
       toast({
         title: "Not signed in",
@@ -1102,6 +1106,10 @@ export default function DashboardPage() {
         variant: "destructive",
       });
     } finally {
+      // 🔽 ensure the button visually returns to its non-pressed state
+      if (typeof document !== "undefined" && document.activeElement instanceof HTMLElement) {
+        document.activeElement.blur();
+      }
       setPhoneSaving(false);
     }
   }, [phoneDraft, toast]);
@@ -1458,15 +1466,25 @@ export default function DashboardPage() {
                       </p>
                     </div>
                     <div className="flex flex-col gap-2 sm:flex-row">
+                      {/* FIX: ensure button only acts on explicit click and returns to normal color after press.
+                         - type="button": never acts as a form submitter
+                         - onMouseDown preventDefault(): avoids a persistent :active state across re-renders
+                      */}
                       <Button
+                        type="button"
+                        onMouseDown={(e) => e.preventDefault()}
                         onClick={handlePhoneSave}
                         disabled={phoneSaving || !phoneDirty}
                         className="sm:flex-1"
                       >
                         {phoneSaving ? "Saving…" : "Save number"}
                       </Button>
+
+                      {/* Optional parity: also guard Cancel from sticky :active */}
                       <Button
+                        type="button"
                         variant="outline"
+                        onMouseDown={(e) => e.preventDefault()}
                         onClick={handlePhoneReset}
                         disabled={phoneSaving || !phoneDirty}
                       >

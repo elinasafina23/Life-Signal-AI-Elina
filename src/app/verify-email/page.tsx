@@ -55,30 +55,36 @@ async function ensureSessionCookie(): Promise<boolean> {
   }
 }
 
-/* ---------------- Page Component ---------------- */
 export default function VerifyEmailPage() {
   return (
-    <Suspense>
+    <Suspense fallback={<div className="p-6 text-sm text-muted-foreground">Loading…</div>}>
       <VerifyEmailPageContent />
     </Suspense>
   );
 }
 
 function VerifyEmailPageContent() {
-  const params = useSearchParams();     // read URL query params
-  const router = useRouter();           // programmatic navigation
+  const params = useSearchParams();
+  const router = useRouter();
 
   // Role hint from the URL; default to "main_user" if not set/invalid.
   const roleParam = normalizeRole(params.get("role")) ?? "main_user";
-  // Optional “take me here after done” path.
-  const nextParam = params.get("next") || "";
+
+  // Sanitize ?next= to same-origin paths only (mirror signup semantics).
+  const rawNext = params.get("next");
+  const nextParam = useMemo(() => {
+    const n = rawNext && rawNext.startsWith("/") ? rawNext : "";
+    return n === "/" ? "" : n;
+  }, [rawNext]);
+
   // Optional email to display on screen (if the link carried it).
   const emailParam = params.get("email") || "";
+
   // Optional invite token for emergency-contact flows.
   const token = params.get("token") || "";
 
   // If the Firebase “action link” opened this page directly, these are set:
-  const mode = params.get("mode");     // should be "verifyEmail" for our flow
+  const mode = params.get("mode");       // should be "verifyEmail" for our flow
   const oobCode = params.get("oobCode"); // one-time verification code
 
   // If the user clicked “Continue” from Firebase’s hosted page, we get this flag.
@@ -92,20 +98,25 @@ function VerifyEmailPageContent() {
   const [status, setStatus] = useState("");
   const [isVerified, setIsVerified] = useState(false);
 
+  // Build fully-qualified continue URL (match signup origin fallback).
+  const origin =
+    typeof window !== "undefined"
+      ? window.location.origin
+      : process.env.NEXT_PUBLIC_APP_ORIGIN || "";
+
   /**
    * Build the “continue URL” that Firebase uses in the verification email.
    * We include role/next/token so the user lands back here with the right context.
    */
   const continueUrl = useMemo(() => {
-    const base = typeof window === "undefined" ? "" : window.location.origin;
     const qs = new URLSearchParams({
       role: roleParam,
-      fromHosted: "1",           // mark that this came back from Firebase hosted page
+      fromHosted: "1",
       ...(nextParam ? { next: nextParam } : {}),
       ...(token ? { token } : {}),
     }).toString();
-    return `${base}/verify-email?${qs}`;
-  }, [roleParam, nextParam, token]);
+    return `${origin}/verify-email?${qs}`;
+  }, [origin, roleParam, nextParam, token]);
 
   /** Choose where to go after successful verification based on role (or nextParam if present). */
   const desiredDestination = (role: Role) =>
@@ -175,7 +186,7 @@ function VerifyEmailPageContent() {
    * Lifecycle:
    * 1) If we have a Firebase action code (?mode=verifyEmail&oobCode=...), apply it.
    * 2) Or if we came back from the hosted page (?fromHosted=1), treat as verified.
-   * 3) Ensure the cookie, resolve role, maybe accept invite, then redirect.
+   * 3) Ensure the cookie, resolve role, accept invite if token present, then redirect.
    * 4) If not signed in, send to login carrying role/next/token.
    */
   useEffect(() => {
@@ -206,10 +217,13 @@ function VerifyEmailPageContent() {
           await ensureSessionCookie();                     // authorize API calls
           await auth.currentUser.reload();                 // make sure emailVerified is current
           const role = await resolveRole(auth.currentUser.uid, params.get("role"));
-          if (role === "emergency_contact") {
+
+          // Accept invite whenever a token exists (not only for emergency_contact).
+          if (token) {
             const ok = await tryAcceptInvite();
             if (!ok) return;                               // we navigated away inside tryAcceptInvite
           }
+
           router.replace(desiredDestination(role));
           return;
         }
@@ -231,7 +245,6 @@ function VerifyEmailPageContent() {
     };
 
     void run();
-    // We intentionally only react to these inputs; eslint disabled to avoid ref churn.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [mode, oobCode, fromHosted]);
 
@@ -249,10 +262,13 @@ function VerifyEmailPageContent() {
       if (u.emailVerified) {
         await ensureSessionCookie();
         const role = await resolveRole(u.uid, params.get("role"));
-        if (role === "emergency_contact") {
+
+        // Accept invite whenever a token exists.
+        if (token) {
           const ok = await tryAcceptInvite();
           if (!ok) return;
         }
+
         router.replace(desiredDestination(role));
       } else {
         setStatus("Still not verified. Check your inbox and try again.");

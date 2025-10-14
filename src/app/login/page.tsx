@@ -1,5 +1,5 @@
 // app/login/page.tsx
-"use client";
+"use client"; // This page uses React hooks and browser-only APIs, so it's a Client Component.
 
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
@@ -26,40 +26,63 @@ import { signInWithEmailAndPassword } from "firebase/auth";
 import { normalizeRole, Role } from "@/lib/roles";
 import { doc, getDoc } from "firebase/firestore";
 
-/* ---------------- Schema ---------------- */
-// Validate the form with zod (email + non-empty password).
+/* -------------------------------------------------------------------------- */
+/*                                   SCHEMA                                   */
+/* -------------------------------------------------------------------------- */
+// Simple login schema: email must be valid, password must be non-empty.
 const loginSchema = z.object({
   email: z.string().email({ message: "Please enter a valid email address." }),
   password: z.string().min(1, { message: "Password is required." }),
 });
 
-/* ---------------- Helpers ---------------- */
-// Only allow same-origin next links; otherwise fall back by role.
-function safeNext(n: string | null | undefined, fallbackRole: Role) {
-  if (n && n.startsWith("/")) return n;
-  return fallbackRole === "emergency_contact" ? "/emergency-dashboard" : "/dashboard";
+/* -------------------------------------------------------------------------- */
+/*                                   HELPERS                                  */
+/* -------------------------------------------------------------------------- */
+// Route constants (kept inline to match the rest of your codebase).
+const EMERGENCY_DASH = "/emergency-dashboard";
+const MAIN_DASH = "/dashboard";
+const SET_SESSION_API = "/api/auth/session";
+const ACCEPT_INVITE_API = "/api/emergency_contact/accept";
+
+/**
+ * safeNext: sanitize a provided "next" path.
+ * - Only allow same-origin relative paths that START with "/".
+ * - Treat "/" specially as "no next" (fall back by role), mirroring signup/verify-email semantics.
+ */
+function safeNext(n: string | null | undefined, fallbackRole: Role): string {
+  if (n && n.startsWith("/")) {
+    // Normalize "/" → use role-based default instead of pushing to site root.
+    if (n === "/") return fallbackRole === "emergency_contact" ? EMERGENCY_DASH : MAIN_DASH;
+    return n;
+  }
+  // No acceptable next given → default by role.
+  return fallbackRole === "emergency_contact" ? EMERGENCY_DASH : MAIN_DASH;
 }
 
-// Start creating a server session cookie; we purposely don't await it
-// so we can redirect immediately (client SDK keeps working meanwhile).
+/**
+ * setSessionCookieFast: create/refresh the server session cookie from the current ID token.
+ * - Fire-and-forget call with keepalive so it can complete after navigation.
+ */
 async function setSessionCookieFast() {
   const u = auth.currentUser;
   if (!u) return;
   const idToken = await u.getIdToken(true);
-  fetch("/api/auth/session", {
+  fetch(SET_SESSION_API, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     credentials: "include",
     body: JSON.stringify({ idToken }),
-    keepalive: true, // helps if we navigate away instantly
+    keepalive: true, // Continue even if user navigates away immediately.
   }).catch(() => {});
 }
 
-// If this login came from an invite link, we can accept it in the background
-// after redirect. This does not block navigation.
+/**
+ * maybeAutoAcceptInvite: if an invite token is present, POST it to the accept endpoint.
+ * - Fire-and-forget (we'll call it after setSessionCookieFast to avoid 401s).
+ */
 async function maybeAutoAcceptInvite(token: string | null) {
   if (!token) return;
-  fetch("/api/emergency_contact/accept", {
+  fetch(ACCEPT_INVITE_API, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     credentials: "include",
@@ -68,61 +91,73 @@ async function maybeAutoAcceptInvite(token: string | null) {
   }).catch(() => {});
 }
 
+/* -------------------------------------------------------------------------- */
+/*                                  COMPONENTS                                */
+/* -------------------------------------------------------------------------- */
+// Wrapper component with Suspense fallback for better UX on slow devices.
 export default function LoginPage() {
   return (
-    <Suspense>
+    <Suspense fallback={<div className="p-6 text-sm text-muted-foreground">Loading…</div>}>
       <LoginPageContent />
     </Suspense>
   );
 }
 
 function LoginPageContent() {
-  const router = useRouter();
-  const params = useSearchParams();
-  const { toast } = useToast();
+  const router = useRouter();                // Programmatic navigation.
+  const params = useSearchParams();          // Read URL query params.
+  const { toast } = useToast();              // Toast notifications.
 
-  const [isSubmitting, setIsSubmitting] = useState(false);
-  const [showPassword, setShowPassword] = useState(false);
+  const [isSubmitting, setIsSubmitting] = useState(false); // Disable UI during submit.
+  const [showPassword, setShowPassword] = useState(false); // Toggle password visibility.
 
-  // Read query params for role, invite token, and explicit next path.
+  // Role hint from the URL; strictly limited to "main_user" | "emergency_contact".
   const roleFromUrl: Role = normalizeRole(params.get("role")) ?? "main_user";
+
+  // Optional invite token for emergency-contact flows.
   const token = params.get("token");
+
+  // Raw explicit next from query; will be sanitized via safeNext.
   const explicitNext = params.get("next");
 
-  // Compute the destination once (memoized) so we don't recompute on every render.
-  const destination = useMemo(
+  // Compute a destination candidate once (based on URL role).
+  // The final destination will be recomputed after we resolve the user's Firestore role.
+  const initialDestination = useMemo(
     () => safeNext(explicitNext, roleFromUrl),
     [explicitNext, roleFromUrl]
   );
 
-  // (Optional) You can keep this effect empty or add analytics; we removed
-  // router.prefetch() because App Router's useRouter() doesn't expose it.
+  // (Reserved for analytics or side-effects; matching other pages' pattern.)
   useEffect(() => {
-    // No-op: prefetch removed to avoid TypeScript errors.
-  }, [destination]);
+    // No prefetch: App Router router does not provide router.prefetch().
+  }, [initialDestination]);
 
-  // Hook up react-hook-form with our zod schema.
+  // Hook up react-hook-form with zod validation.
   const form = useForm<z.infer<typeof loginSchema>>({
     resolver: zodResolver(loginSchema),
     defaultValues: { email: "", password: "" },
   });
 
-  // Main submit handler.
+  /**
+   * onSubmit: main login flow
+   * 1) Sign in with Firebase Auth.
+   * 2) Resolve role from Firestore (so dashboard choice is accurate).
+   * 3) Build the final destination using the resolved role and sanitized next.
+   * 4) Fire-and-forget: set session cookie, then accept invite (sequentially to avoid 401 race).
+   * 5) Redirect immediately.
+   */
   const onSubmit = async (values: z.infer<typeof loginSchema>) => {
     try {
       setIsSubmitting(true);
 
-      // 1) Sign in with Firebase Auth (await only this).
+      // 1) Sign in the user with Firebase Auth.
       const { user } = await signInWithEmailAndPassword(
         auth,
         values.email.trim().toLowerCase(),
         values.password
       );
 
-      // 2) Resolve the user's actual role from Firestore so we can pick the
-      //     correct destination. This prevents emergency contacts from
-      //     flashing the main dashboard before their Firestore listener
-      //     redirects them away.
+      // 2) Resolve the user's role from Firestore (fallback to URL role if unavailable).
       let resolvedRole: Role = roleFromUrl;
       try {
         const profileRef = doc(db, "users", user.uid);
@@ -131,32 +166,38 @@ function LoginPageContent() {
           profileSnap.exists() ? (profileSnap.data() as any).role : undefined
         );
         if (roleFromProfile) {
-          resolvedRole = roleFromProfile;
+          resolvedRole = roleFromProfile; // Use server-sourced truth when available.
         }
       } catch (error) {
-        // Ignore Firestore errors — we'll fall back to the role from the URL.
+        // If Firestore fails, stick with the role from the URL.
         console.error("Failed to resolve user role", error);
       }
 
+      // 3) Compute the final destination using sanitized next + resolved role.
       const finalDestination = safeNext(explicitNext, resolvedRole);
 
-      // 3) Fire-and-forget the session cookie creation + invite acceptance.
-      void setSessionCookieFast();
-      void maybeAutoAcceptInvite(token);
+      // 4) Fire-and-forget background tasks, but chain to reduce 401s on invite acceptance.
+      void (async () => {
+        try {
+          await setSessionCookieFast(); // Give the cookie a head start.
+        } catch {}
+        await maybeAutoAcceptInvite(token); // Then attempt invite acceptance.
+      })();
 
-      // 4) Redirect immediately (no waiting).
+      // 5) Redirect the user right away.
       router.replace(finalDestination);
 
-      // 5) Friendly toast (doesn't block the redirect).
+      // Friendly toast (doesn't block redirect).
       toast({
         title: "Login Successful",
         description: `Welcome back, ${user.email ?? "user"}!`,
       });
     } catch (err: any) {
-      // Map common auth errors to friendly messages.
+      // Map Firebase Auth errors into user-friendly messages.
       const code = err?.code as string | undefined;
       let message = "Something went wrong. Please try again.";
       if (code === "auth/invalid-email") message = "Invalid email address.";
+      else if (code === "auth/user-disabled") message = "This account has been disabled.";
       else if (code === "auth/user-not-found" || code === "auth/wrong-password")
         message = "Incorrect email or password.";
       else if (code === "auth/too-many-requests")
@@ -168,16 +209,22 @@ function LoginPageContent() {
     }
   };
 
-  // Build the signup link (preserves role + next + invite token).
+  // Build the Signup link: preserve role + sanitized "next" + optional invite token.
+  // We pass initialDestination (already sanitized) to maintain a consistent post-signup path.
   const signupHref = `/signup?role=${encodeURIComponent(
     roleFromUrl
-  )}&next=${encodeURIComponent(destination)}${token ? `&token=${encodeURIComponent(token)}` : ""}`;
+  )}&next=${encodeURIComponent(initialDestination)}${token ? `&token=${encodeURIComponent(token)}` : ""}`;
 
+  /* -------------------------------------------------------------------------- */
+  /*                                    UI                                      */
+  /* -------------------------------------------------------------------------- */
   return (
     <div className="flex flex-col min-h-screen bg-background">
+      {/* Shared site header */}
       <Header />
       <main className="flex-grow flex items-center justify-center p-4">
         <Card className="w-full max-w-md shadow-xl">
+          {/* Card header with role-sensitive description */}
           <CardHeader className="text-center">
             <CardTitle className="text-3xl font-headline">Welcome Back!</CardTitle>
             <CardDescription>
@@ -187,6 +234,7 @@ function LoginPageContent() {
             </CardDescription>
           </CardHeader>
 
+          {/* Form wrapper (react-hook-form) */}
           <Form {...form}>
             <form onSubmit={form.handleSubmit(onSubmit)}>
               <CardContent className="space-y-4">
@@ -203,8 +251,8 @@ function LoginPageContent() {
                           placeholder="your@email.com"
                           {...field}
                           disabled={isSubmitting}
-                          autoComplete="email"
-                          inputMode="email"
+                          autoComplete="email"      // Helps password managers.
+                          inputMode="email"         // Mobile keyboards show @ and .com.
                         />
                       </FormControl>
                       <FormMessage />
@@ -212,7 +260,7 @@ function LoginPageContent() {
                   )}
                 />
 
-                {/* Password field */}
+                {/* Password field with show/hide toggle */}
                 <FormField
                   control={form.control}
                   name="password"
@@ -226,8 +274,9 @@ function LoginPageContent() {
                             placeholder="••••••••"
                             {...field}
                             disabled={isSubmitting}
-                            autoComplete="current-password"
+                            autoComplete="current-password" // Browser can autofill.
                           />
+                          {/* Toggle button is purely client-side; accessible label provided. */}
                           <button
                             type="button"
                             onClick={() => setShowPassword((prev) => !prev)}
@@ -243,6 +292,7 @@ function LoginPageContent() {
                         </div>
                       </FormControl>
                       <FormMessage />
+                      {/* Forgot password link (route assumed to exist). */}
                       <div className="text-right mt-2">
                         <Link
                           href="/forgot-password"
@@ -256,6 +306,7 @@ function LoginPageContent() {
                 />
               </CardContent>
 
+              {/* Submit + alternate path */}
               <CardFooter className="flex flex-col gap-4">
                 <Button type="submit" className="w-full text-lg py-6" disabled={isSubmitting}>
                   {isSubmitting ? "Signing in..." : "Sign In"}
@@ -272,6 +323,7 @@ function LoginPageContent() {
           </Form>
         </Card>
       </main>
+      {/* Shared site footer */}
       <Footer />
     </div>
   );
