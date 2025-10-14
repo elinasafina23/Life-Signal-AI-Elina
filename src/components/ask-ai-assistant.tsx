@@ -1,15 +1,8 @@
+// src/components/ask-ai-assistant.tsx
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import {
-  Sparkles,
-  Volume2,
-  VolumeX,
-  Loader2,
-  Mic,
-  MicOff,
-  ChevronDown,
-} from "lucide-react";
+import { Sparkles, Volume2, VolumeX, Loader2, Mic, MicOff } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
@@ -22,7 +15,6 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { Collapsible, CollapsibleTrigger } from "@/components/ui/collapsible";
 
 interface AskAiAssistantResponse {
   answer: string;
@@ -41,11 +33,13 @@ export function AskAiAssistant() {
   const [answer, setAnswer] = useState<string | null>(null);
   const [mood, setMood] = useState<{ mood: string; description?: string } | null>(null);
   const [error, setError] = useState<string | null>(null);
+
   const [speechSupported, setSpeechSupported] = useState(false);
   const [isSpeaking, setIsSpeaking] = useState(false);
   const [speechInputSupported, setSpeechInputSupported] = useState(false);
   const [isListening, setIsListening] = useState(false);
   const [preferredVoice, setPreferredVoice] = useState<SpeechSynthesisVoice | null>(null);
+
   const [answerDialogOpen, setAnswerDialogOpen] = useState(false);
   const [lastAskedQuestion, setLastAskedQuestion] = useState<string | null>(null);
 
@@ -57,39 +51,29 @@ export function AskAiAssistant() {
 
     if (typeof window !== "undefined" && "speechSynthesis" in window) {
       setSpeechSupported(true);
-
       const synth = window.speechSynthesis;
+
       const resolveVoice = () => {
         const voices = synth.getVoices();
         if (!voices?.length) return;
-
-        const normalized = voices.map((voice) => ({
-          voice,
-          name: voice.name.toLowerCase(),
-        }));
-
+        const normalized = voices.map((v) => ({ voice: v, name: v.name.toLowerCase() }));
         const preferred =
-          normalized.find(({ name }) => name.includes("google") && name.includes("english"))?.
-            voice ||
+          normalized.find(({ name }) => name.includes("google") && name.includes("english"))?.voice ||
           normalized.find(({ name }) => name.includes("neural"))?.voice ||
-          voices.find((voice) => voice.lang?.toLowerCase().startsWith("en")) ||
+          voices.find((v) => v.lang?.toLowerCase().startsWith("en")) ||
           voices[0] ||
           null;
-
         setPreferredVoice(preferred ?? null);
       };
 
       resolveVoice();
-
       if (typeof synth.addEventListener === "function") {
         synth.addEventListener("voiceschanged", resolveVoice);
         speechCleanup = () => synth.removeEventListener("voiceschanged", resolveVoice);
       } else if (typeof synth.onvoiceschanged !== "undefined") {
         synth.onvoiceschanged = resolveVoice;
         speechCleanup = () => {
-          if (typeof synth.onvoiceschanged !== "undefined") {
-            synth.onvoiceschanged = null;
-          }
+          if (typeof synth.onvoiceschanged !== "undefined") (synth as any).onvoiceschanged = null;
         };
       }
     }
@@ -97,56 +81,47 @@ export function AskAiAssistant() {
     if (typeof window !== "undefined") {
       const SpeechRecognition =
         (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
-      if (SpeechRecognition) {
-        setSpeechInputSupported(true);
-      }
+      if (SpeechRecognition) setSpeechInputSupported(true);
     }
 
     return () => {
-      if (speechCleanup) {
-        speechCleanup();
-      }
+      if (speechCleanup) speechCleanup();
       if (typeof window !== "undefined" && "speechSynthesis" in window) {
         window.speechSynthesis.cancel();
       }
       if (recognitionRef.current) {
         try {
           recognitionRef.current.stop();
-        } catch {
-          // ignore stopping errors
-        }
+        } catch {}
         recognitionRef.current = null;
       }
     };
   }, []);
 
-  const speak = useCallback((text: string) => {
-    if (!speechSupported || typeof window === "undefined") return;
-
-    const synth = window.speechSynthesis;
-    synth.cancel();
-
-    const utterance = new SpeechSynthesisUtterance(text);
-    if (preferredVoice) {
-      utterance.voice = preferredVoice;
-    }
-
-    utterance.rate = preferredVoice ? 0.96 : 0.94;
-    utterance.pitch = preferredVoice ? 1.04 : 1.02;
-    utterance.volume = 0.95;
-    utterance.onend = () => {
-      setIsSpeaking(false);
-      utteranceRef.current = null;
-    };
-    utterance.onerror = () => {
-      setIsSpeaking(false);
-      utteranceRef.current = null;
-    };
-
-    utteranceRef.current = utterance;
-    setIsSpeaking(true);
-    synth.speak(utterance);
-  }, [preferredVoice, speechSupported]);
+  const speak = useCallback(
+    (text: string) => {
+      if (!speechSupported || typeof window === "undefined") return;
+      const synth = window.speechSynthesis;
+      synth.cancel();
+      const utterance = new SpeechSynthesisUtterance(text);
+      if (preferredVoice) utterance.voice = preferredVoice;
+      utterance.rate = preferredVoice ? 0.96 : 0.94;
+      utterance.pitch = preferredVoice ? 1.04 : 1.02;
+      utterance.volume = 0.95;
+      utterance.onend = () => {
+        setIsSpeaking(false);
+        utteranceRef.current = null;
+      };
+      utterance.onerror = () => {
+        setIsSpeaking(false);
+        utteranceRef.current = null;
+      };
+      utteranceRef.current = utterance;
+      setIsSpeaking(true);
+      synth.speak(utterance);
+    },
+    [preferredVoice, speechSupported],
+  );
 
   const stopSpeaking = useCallback(() => {
     if (!speechSupported || typeof window === "undefined") return;
@@ -159,7 +134,6 @@ export function AskAiAssistant() {
     async (input?: string) => {
       const source = typeof input === "string" ? input : question;
       const trimmed = source.trim();
-
       if (!trimmed) {
         setError("Ask a question to get started.");
         return;
@@ -185,9 +159,7 @@ export function AskAiAssistant() {
         };
 
         if (!response.ok || data?.error) {
-          throw new Error(
-            data?.error || "The assistant was unable to answer. Please try again.",
-          );
+          throw new Error(data?.error || "The assistant was unable to answer. Please try again.");
         }
 
         setAnswer(data.answer);
@@ -198,22 +170,15 @@ export function AskAiAssistant() {
             description: data.moodSummary.description ?? undefined,
           });
         }
-
         if (data.answer && speechSupported) {
           speak(data.answer);
         }
       } catch (err) {
         console.error("AskAiAssistant failed:", err);
         const message =
-          err instanceof Error
-            ? err.message
-            : "The assistant encountered an unexpected error.";
+          err instanceof Error ? err.message : "The assistant encountered an unexpected error.";
         setError(message);
-        toast({
-          title: "Assistant unavailable",
-          description: message,
-          variant: "destructive",
-        });
+        toast({ title: "Assistant unavailable", description: message, variant: "destructive" });
       } finally {
         setLoading(false);
       }
@@ -227,18 +192,13 @@ export function AskAiAssistant() {
     if (!recognitionRef.current) return;
     try {
       recognitionRef.current.stop();
-    } catch {
-      // ignore errors when stopping recognition
-    }
+    } catch {}
     recognitionRef.current = null;
     setIsListening(false);
   }, []);
 
   const handleVoiceAsk = useCallback(() => {
-    if (loading || !speechInputSupported || typeof window === "undefined") {
-      return;
-    }
-
+    if (loading || !speechInputSupported || typeof window === "undefined") return;
     const SpeechRecognition =
       (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
     if (!SpeechRecognition) {
@@ -299,7 +259,7 @@ export function AskAiAssistant() {
   }, [loading, speechInputSupported, stopVoiceCapture, submitQuestion, toast]);
 
   return (
-    <div className="flex w-full flex-1 flex-col gap-6">
+    <div className="relative overflow-hidden flex w-full flex-1 flex-col gap-6">
       <div className="space-y-2">
         <label htmlFor="ask-ai-input" className="text-lg font-semibold text-left">
           Ask anything
@@ -307,7 +267,7 @@ export function AskAiAssistant() {
         <Textarea
           id="ask-ai-input"
           value={question}
-          onChange={(event) => setQuestion(event.target.value)}
+          onChange={(e) => setQuestion(e.target.value)}
           placeholder="How can I manage my stress today?"
           className="min-h-[8rem] resize-none"
           disabled={loading}
@@ -316,6 +276,7 @@ export function AskAiAssistant() {
 
       <div className="grid w-full gap-3 sm:grid-cols-[minmax(0,1fr)_auto_auto] sm:items-stretch">
         <Button
+          onMouseDown={(e) => e.preventDefault()}
           onClick={() => submitQuestion()}
           disabled={!canSubmit}
           size="lg"
@@ -338,12 +299,9 @@ export function AskAiAssistant() {
           <Button
             type="button"
             variant="outline"
+            onMouseDown={(e) => e.preventDefault()}
             onClick={() =>
-              answer && speechSupported
-                ? isSpeaking
-                  ? stopSpeaking()
-                  : speak(answer)
-                : undefined
+              answer && speechSupported ? (isSpeaking ? stopSpeaking() : speak(answer)) : undefined
             }
             disabled={loading || !speechSupported || !answer}
             className={`w-full ${!speechSupported || !answer ? "invisible" : ""}`}
@@ -368,6 +326,7 @@ export function AskAiAssistant() {
             <Button
               type="button"
               variant={isListening ? "destructive" : "outline"}
+              onMouseDown={(e) => e.preventDefault()}
               onClick={isListening ? stopVoiceCapture : handleVoiceAsk}
               disabled={loading}
               className="w-full"
@@ -390,49 +349,30 @@ export function AskAiAssistant() {
         </div>
       </div>
 
-      {error && <p className="text-sm text-destructive">{error}</p>}
+      {/* NEW: “Show text” lives on the main card, under the buttons */}
+    {/* Show text on main card, nudged in from the right and lifted up */}
+<div className="flex w-full items-center justify-end pr-4 sm:pr-6 -mt-2 sm:-mt-3">
+  <button
+    type="button"
+    onClick={() => answer && setAnswerDialogOpen(true)}
+    disabled={!answer}
+    className={`text-sm font-semibold underline underline-offset-4 ${
+      answer ? "text-primary hover:opacity-90" : "text-muted-foreground cursor-not-allowed"
+    }`}
+    aria-label="Show text"
+  >
+    Show text
+  </button>
+</div>
 
-      <Card className="border-dashed border-primary/40 bg-primary/5">
-        <CardContent className="space-y-3 p-5 text-left">
-          <p className="text-sm font-semibold uppercase tracking-wide text-primary">Assistant</p>
-          <p className="text-sm text-muted-foreground">
-            {answer
-              ? "Your latest guidance is ready. Tap below to open it in a pop-out window."
-              : "After you ask a question, tap below to preview the assistant's response."}
-          </p>
-          <Collapsible
-            open={answerDialogOpen}
-            onOpenChange={(open) => {
-              if (open && !answer) return;
-              setAnswerDialogOpen(open);
-              if (!open) {
-                stopSpeaking();
-              }
-            }}
-          >
-            <CollapsibleTrigger asChild>
-              <Button
-                type="button"
-                variant="secondary"
-                className="flex w-full items-center justify-between gap-3 text-left"
-                disabled={!answer}
-              >
-                <span className="line-clamp-2 text-sm font-medium leading-snug">
-                  {answer
-                    ? answer
-                    : "Ask a question and your response preview will appear here."}
-                </span>
-                <ChevronDown
-                  className={`h-4 w-4 flex-shrink-0 transition-transform ${
-                    answerDialogOpen ? "rotate-180" : ""
-                  }`}
-                  aria-hidden
-                />
-              </Button>
-            </CollapsibleTrigger>
-          </Collapsible>
-        </CardContent>
-      </Card>
+
+      {error && (
+        <p className="text-sm text-destructive" aria-live="polite">
+          {error}
+        </p>
+      )}
+
+      
 
       <Dialog
         open={answerDialogOpen}
