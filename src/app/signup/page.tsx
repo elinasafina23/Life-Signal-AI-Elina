@@ -86,13 +86,17 @@ async function setSessionCookieFast() {
 }
 
 // If sign-up came from an invite link, accept it in the background (doesn’t block).
-async function maybeAutoAcceptInvite(token: string | null) {
-  if (!token) return;
+async function maybeAutoAcceptInvite(token: string | null, inviteId: string | null) {
+  if (!token && !inviteId) return;
+  const payload: Record<string, string> = {};
+  if (token) payload.token = token;
+  if (inviteId) payload.inviteId = inviteId;
+
   fetch("/api/emergency_contact/accept", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     credentials: "include",
-    body: JSON.stringify({ token }),
+    body: JSON.stringify(payload),
     keepalive: true,
   }).catch(() => {});
 }
@@ -112,6 +116,7 @@ function SignupPageContent() {
 
   const role: Role = normalizeRole(params.get("role")) ?? "main_user";
   const token = params.get("token") || null;
+  const inviteId = params.get("invite") || null;
 
   // Keep your exact next-sanitizing semantics (including "/" -> "")
   const rawNext = params.get("next");
@@ -132,9 +137,10 @@ function SignupPageContent() {
       fromHosted: "1",
       ...(next ? { next } : {}),
       ...(token ? { token } : {}),
+      ...(inviteId ? { invite: inviteId } : {}),
     }).toString();
     return `${appOrigin}/verify-email?${q}`;
-  }, [appOrigin, role, next, token]);
+  }, [appOrigin, role, next, token, inviteId]);
 
   const [passwordStrength, setPasswordStrength] = useState(0);
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -210,13 +216,13 @@ function SignupPageContent() {
 
       // 5) Non-blocking: session cookie + optional invite accept
       void setSessionCookieFast();
-      void maybeAutoAcceptInvite(token);
+      void maybeAutoAcceptInvite(token, inviteId);
 
       // 6) Your redirect pattern
       router.push(
         `/verify-email?email=${encodeURIComponent(values.email)}&role=${encodeURIComponent(role)}${
           next ? `&next=${encodeURIComponent(next)}` : ""
-        }${token ? `&token=${encodeURIComponent(token)}` : ""}`
+        }${token ? `&token=${encodeURIComponent(token)}` : ""}${inviteId ? `&invite=${encodeURIComponent(inviteId)}` : ""}`
       );
     } catch (err: any) {
       console.error(err);
