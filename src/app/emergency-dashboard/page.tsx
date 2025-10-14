@@ -1,4 +1,3 @@
-// app/emergency-dashboard/page.tsx
 "use client";
 
 import Image from "next/image";
@@ -106,6 +105,7 @@ export type MainUserDoc = {
     anomalyDetected?: boolean;
     createdAt?: Timestamp;
     audioDataUrl?: string;
+    audioUrl?: string;
   };
 };
 
@@ -192,7 +192,7 @@ export default function EmergencyDashboardPage() {
   const [mainUsers, setMainUsers] = useState<MainUserCard[]>([]);
   const [loading, setLoading] = useState(true);
 
-  // ✅ renamed to the canonical contact id
+  // ✅ canonical contact id
   const [emergencyContactUid, setEmergencyContactUid] = useState<string | null>(null);
 
   // centered popup when location is missing
@@ -471,7 +471,7 @@ export default function EmergencyDashboardPage() {
                     initials,
                     colorClass,
                     status: "Inactive",
-                  });
+                  } as MainUserCard);
                   return Array.from(map.values()).sort((a, b) => a.name.localeCompare(b.name));
                 });
               }

@@ -191,7 +191,7 @@ export default function EmergencyDashboardPage() {
       if (!user) {
         setLoading(false);
         router.replace(
-          `/login?role=emergency_contact&next=${encodeURIComponent("/emergency-dashboard")}`
+          `/signup?role=emergency_contact&next=${encodeURIComponent("/emergency-dashboard")}`
         );
         return;
       }
@@ -206,7 +206,7 @@ export default function EmergencyDashboardPage() {
         }
       } catch {
         router.replace(
-          `/login?role=emergency_contact&next=${encodeURIComponent("/emergency-dashboard")}`
+          `/signup?role=emergency_contact&next=${encodeURIComponent("/emergency-dashboard")}`
         );
         return;
       }
