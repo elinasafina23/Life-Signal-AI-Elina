@@ -57,13 +57,17 @@ async function setSessionCookieFast() {
 
 // If this login came from an invite link, we can accept it in the background
 // after redirect. This does not block navigation.
-async function maybeAutoAcceptInvite(token: string | null) {
-  if (!token) return;
+async function maybeAutoAcceptInvite(token: string | null, inviteId: string | null) {
+  if (!token && !inviteId) return;
+  const payload: Record<string, string> = {};
+  if (token) payload.token = token;
+  if (inviteId) payload.inviteId = inviteId;
+
   fetch("/api/emergency_contact/accept", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     credentials: "include",
-    body: JSON.stringify({ token }),
+    body: JSON.stringify(payload),
     keepalive: true,
   }).catch(() => {});
 }
@@ -87,6 +91,7 @@ function LoginPageContent() {
   // Read query params for role, invite token, and explicit next path.
   const roleFromUrl: Role = normalizeRole(params.get("role")) ?? "main_user";
   const token = params.get("token");
+  const inviteId = params.get("invite");
   const explicitNext = params.get("next");
 
   // Compute the destination once (memoized) so we don't recompute on every render.
@@ -142,7 +147,7 @@ function LoginPageContent() {
 
       // 3) Fire-and-forget the session cookie creation + invite acceptance.
       void setSessionCookieFast();
-      void maybeAutoAcceptInvite(token);
+      void maybeAutoAcceptInvite(token, inviteId);
 
       // 4) Redirect immediately (no waiting).
       router.replace(finalDestination);

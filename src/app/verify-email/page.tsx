@@ -76,6 +76,7 @@ function VerifyEmailPageContent() {
   const emailParam = params.get("email") || "";
   // Optional invite token for emergency-contact flows.
   const token = params.get("token") || "";
+  const inviteId = params.get("invite") || "";
 
   // If the Firebase “action link” opened this page directly, these are set:
   const mode = params.get("mode");     // should be "verifyEmail" for our flow
@@ -103,9 +104,10 @@ function VerifyEmailPageContent() {
       fromHosted: "1",           // mark that this came back from Firebase hosted page
       ...(nextParam ? { next: nextParam } : {}),
       ...(token ? { token } : {}),
+      ...(inviteId ? { invite: inviteId } : {}),
     }).toString();
     return `${base}/verify-email?${qs}`;
-  }, [roleParam, nextParam, token]);
+  }, [roleParam, nextParam, token, inviteId]);
 
   /** Choose where to go after successful verification based on role (or nextParam if present). */
   const desiredDestination = (role: Role) =>
@@ -119,14 +121,17 @@ function VerifyEmailPageContent() {
    * Returns true if everything’s OK and we can continue; false if we navigated away.
    */
   const tryAcceptInvite = async (): Promise<boolean> => {
-    if (!token) return true; // Nothing to accept.
+    if (!token && !inviteId) return true; // Nothing to accept.
 
     const attempt = () =>
       fetch(ACCEPT_API, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         credentials: "include",
-        body: JSON.stringify({ token }),
+        body: JSON.stringify({
+          ...(token ? { token } : {}),
+          ...(inviteId ? { inviteId } : {}),
+        }),
       });
 
     try {
@@ -143,17 +148,25 @@ function VerifyEmailPageContent() {
 
       // Unauthenticated → go to login (preserve token + desired next).
       if (res.status === 401) {
-        router.replace(
-          `/login?role=emergency_contact&next=${encodeURIComponent(
-            desiredDestination("emergency_contact")
-          )}&token=${encodeURIComponent(token)}&verified=1`
-        );
+        const qs = new URLSearchParams({
+          role: "emergency_contact",
+          next: desiredDestination("emergency_contact"),
+          verified: "1",
+          ...(token ? { token } : {}),
+          ...(inviteId ? { invite: inviteId } : {}),
+        });
+        router.replace(`/login?${qs.toString()}`);
         return false;
       }
 
       // Authenticated but wrong account/email → show accept page (has sign-out flow).
       if (res.status === 403) {
-        router.replace(`/emergency_contact/accept?token=${encodeURIComponent(token)}`);
+        const signup = new URLSearchParams({
+          role: "emergency_contact",
+          ...(token ? { token } : {}),
+          ...(inviteId ? { invite: inviteId } : {}),
+        });
+        router.replace(`/signup?${signup.toString()}`);
         return false;
       }
 

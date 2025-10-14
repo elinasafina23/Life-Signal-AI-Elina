@@ -189,13 +189,14 @@ export async function POST(req: NextRequest) {
 
     // Build the acceptance URL
     const origin = getOrigin(req);
-    const acceptUrl = `${origin}/emergency_contact/accept?invite=${inviteRef.id}&token=${token}`;
+    const acceptPath = `/signup?role=emergency_contact&token=${token}`;
+    const acceptUrl = `${origin}${acceptPath}`;
 
     /**
      * Optional: If you enforce verified email before acceptance,
      * send them to /verify-email first, then continue to acceptUrl.
      */
-    const verifyContinue = `${origin}/verify-email?next=${encodeURIComponent(acceptUrl)}`;
+    const verifyContinue = `${origin}/verify-email?next=${encodeURIComponent(acceptPath)}`;
 
     // Send the email using your /mail collection (Firebase Ext or your mail worker)
     await db.collection("mail").add({
