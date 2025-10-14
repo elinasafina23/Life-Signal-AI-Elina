@@ -124,7 +124,7 @@ export async function POST(req: NextRequest) {
     }
 
     // --- Identify the main user being linked to ---
-    const mainUserUid: string = inv.mainUserId; // invite schema used mainUserUid previously
+    const mainUserUid: string = inv.mainUserUid || inv.mainUserId; // tolerate both spellings
     if (!mainUserUid) {
       return NextResponse.json({ error: "Invite missing main user id" }, { status: 400 });
     }
@@ -164,6 +164,7 @@ export async function POST(req: NextRequest) {
       emergencyContactUid,
       // Helpful denormalized info
       mainUserUid,
+      mainUserId: mainUserUid, // legacy mirror until all readers use mainUserUid
       emergencyContactEmail: signedInEmail,
       mainUserName: mainUserName || "",
       mainUserAvatar: mainUserAvatar || "",
@@ -187,6 +188,7 @@ export async function POST(req: NextRequest) {
     const ecPayload: any = {
       id: emergencyContactId,
       mainUserUid,                // 🔁 standardized naming
+      mainUserId: mainUserUid,    // 🔁 legacy mirror for older readers
       emergencyContactUid,        // 🔁 standardized naming
       emergencyContactEmail: invitedEmail,
       status: "ACTIVE",
