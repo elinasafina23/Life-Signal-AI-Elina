@@ -152,7 +152,7 @@ export async function POST(req: NextRequest) {
       role: "emergency_contact",
       emergencyContactEmail,
       relation,
-      status: "pending",
+      status: "PENDING",
       token,                      // (stored for convenience – can be omitted if you prefer ONLY hash)
       tokenHash,                  // used for lookup without exposing token
       name,

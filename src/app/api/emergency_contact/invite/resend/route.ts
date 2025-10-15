@@ -134,7 +134,7 @@ export async function POST(req: NextRequest) {
       role: "emergency_contact",
       emergencyContactEmail,
       relation,
-      status: "pending",
+      status: "PENDING",
       token,                      // (kept for convenience; hash is what we trust)
       tokenHash,
       name,

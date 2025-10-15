@@ -412,10 +412,15 @@ export default function DashboardPage() {
         // Phone field
         const storedPhone =
           typeof data.phone === "string" ? sanitizePhone(data.phone) : "";
-        setSavedPhone(storedPhone);
-        setPhoneDraft((prev) =>
-          sanitizePhone(prev) === storedPhone ? storedPhone : prev
-        );
+          setPhoneDraft((prev) => {
+            const prevSan = sanitizePhone(prev);
+            // If the field is empty on load, populate from DB
+            if (!prevSan) return storedPhone;
+            // If it already matches DB (e.g., after save), normalize it
+            if (prevSan === storedPhone) return storedPhone;
+            // Otherwise, preserve the user's unsaved local edits
+            return prev;
+          });
 
         // Emergency contacts snapshot → extract key fields
         const contacts = data.emergencyContacts as EmergencyContactsData | undefined;
