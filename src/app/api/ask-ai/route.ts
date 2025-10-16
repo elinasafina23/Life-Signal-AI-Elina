@@ -1,3 +1,4 @@
+//src/app/api/ask-ai/route.ts//
 // Ensure this route runs on the Node.js runtime (not Edge)
 export const runtime = "nodejs";
 // Disable caching and force dynamic execution (since we touch Firestore)

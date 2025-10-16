@@ -1,3 +1,4 @@
+//src/app/emergency-dashboard/page.tsx/
 "use client";
 
 import Image from "next/image";
@@ -43,6 +44,7 @@ import {
   ShieldCheck,
   Play,
   Pause,
+  Smile
 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 
@@ -83,6 +85,12 @@ export type MainUserCard = {
     createdAt: Date | null;
     audioUrl?: string | null;
   } | null;
+  // NEW: mood summary shown on the emergency dashboard
+  moodSummary?: {
+    mood: string;
+    description?: string;
+    updatedAt: Date | null;
+  } | null;
 };
 
 export type MainUserDoc = {
@@ -106,6 +114,13 @@ export type MainUserDoc = {
     createdAt?: Timestamp;
     audioDataUrl?: string;
     audioUrl?: string;
+  };
+   // NEW: persisted mood summary written by /api/ask-ai
+   latestMoodAssessment?: {
+    mood?: string;
+    description?: string;
+    updatedAt?: Timestamp;
+    source?: "ask-ai";
   };
 };
 
@@ -437,6 +452,20 @@ export default function EmergencyDashboardPage() {
                 ) {
                   latestVoiceMessage = null;
                 }
+// ---- Mood summary (from /api/ask-ai) ----
+const rawMood = (userData as any)?.latestMoodAssessment;
+const moodSummary =
+  rawMood && typeof rawMood?.mood === "string" && rawMood.mood.trim()
+    ? {
+        mood: rawMood.mood.trim(),
+        description:
+          typeof rawMood?.description === "string" ? rawMood.description.trim() : undefined,
+        updatedAt:
+          rawMood?.updatedAt && typeof rawMood.updatedAt.toDate === "function"
+            ? rawMood.updatedAt.toDate()
+            : null,
+      }
+    : null;
 
                 const updatedCard: MainUserCard = {
                   mainUserUid: mainUserId,
@@ -452,6 +481,7 @@ export default function EmergencyDashboardPage() {
                   locationSharing: hasConsent,
                   phone: sanitizedPhone || null,
                   latestVoiceMessage,
+                  moodSummary, 
                 };
 
                 setMainUsers((prev) => {
@@ -574,6 +604,31 @@ export default function EmergencyDashboardPage() {
                       {p.status || "—"}
                     </Badge>
                   </div>
+                  {p.moodSummary && (
+  <div className="flex items-start gap-3 rounded-md border p-3">
+    {/* left icon */}
+    <div className="flex h-8 w-8 items-center justify-center rounded-full bg-primary/10 text-primary">
+      <Smile className="h-4 w-4" aria-hidden />
+    </div>
+
+    {/* text */}
+    <div className="min-w-0">
+      <p className="text-sm font-semibold">
+        Mood: <span className="capitalize">{p.moodSummary.mood}</span>
+      </p>
+      {p.moodSummary.description && (
+        <p className="text-sm text-muted-foreground">
+          {p.moodSummary.description}
+        </p>
+      )}
+      {p.moodSummary.updatedAt && (
+        <p className="text-xs text-muted-foreground mt-1">
+          Updated {formatWhen(p.moodSummary.updatedAt)}
+        </p>
+      )}
+    </div>
+  </div>
+)}
 
                   <div className="flex justify-between items-center">
                     <p className="font-semibold">Location status:</p>
