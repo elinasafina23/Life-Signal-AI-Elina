@@ -7,10 +7,12 @@ import { Button } from "@/components/ui/button";
 import type { AssessVoiceCheckInOutput } from "@/ai/flows/voice-check-in-assessment";
 import { useToast } from "@/hooks/use-toast";
 
-interface NotifyContactsResponse {
+/* ----------------------------- Types ----------------------------- */
+
+interface SubmitResponse {
   ok: boolean;
-  contactCount?: number; // broadcast response
-  updatedDocs?: number;  // targeted response
+  // present for broadcast
+  contactCount?: number;
   anomalyPush?: {
     attempted: boolean;
     contactUidCount?: number;
@@ -18,6 +20,9 @@ interface NotifyContactsResponse {
     successCount?: number;
     failureCount?: number;
   };
+  // present for targeted
+  updatedDocs?: number;
+  contactId?: string;
 }
 
 interface VoiceContactTargetPayload {
@@ -25,96 +30,137 @@ interface VoiceContactTargetPayload {
   phone?: string | null;
 }
 
-/**
- * Send the voice payload either:
- * - to ALL emergency contacts (broadcast) via /api/voice-check-in/notify
- * - to ONE selected contact (targeted) via /api/voice-message/send
- *
- * We switch endpoints based on whether a targetContact with (email|phone) is supplied.
+/* ------------------------ Unified submitter ------------------------ */
+/** Decide and call the right API based on props:
+ * - EC -> MU (sendToUid provided)        => POST /api/voice-message/send { sendToUid }
+ * - MU -> specific EC (targetContact)    => POST /api/voice-message/send { targetContact }
+ * - MU -> all ECs (neither provided)     => POST /api/voice-check-in/notify
  */
-async function notifyEmergencyContacts(
-  currentTranscript: string,
-  aiAssessment: AssessVoiceCheckInOutput,
-  audioDataUrl?: string | null,
-  targetContact?: VoiceContactTargetPayload | null,
-): Promise<NotifyContactsResponse> {
-  // Decide the endpoint: targeted vs broadcast
-  const isTargeted =
+async function submitVoice({
+  transcribedSpeech,
+  previousVoiceMessages,
+  audioDataUrl,
+  targetContact,
+  sendToUid,
+}: {
+  transcribedSpeech: string;
+  previousVoiceMessages: string[];
+  audioDataUrl?: string | null;
+  targetContact?: VoiceContactTargetPayload | null;
+  sendToUid?: string | null;
+}): Promise<SubmitResponse> {
+  // 1) Get AI assessment first
+  const assessRes = await fetch("/api/voice-check-in", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    credentials: "include",
+    body: JSON.stringify({ transcribedSpeech, previousVoiceMessages }),
+  });
+  const assessment: AssessVoiceCheckInOutput | any = await assessRes.json();
+  if (!assessRes.ok || (assessment as any)?.error) {
+    throw new Error((assessment as any)?.error || "Failed to assess voice check-in");
+  }
+
+  // 2) Route selection
+
+  // EC → MU (IMPORTANT: API expects `sendToUid`, not `targetMainUserUid`)
+  if (sendToUid) {
+    const r = await fetch("/api/voice-message/send", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      credentials: "include",
+      body: JSON.stringify({
+        transcribedSpeech,
+        assessment,
+        audioDataUrl: audioDataUrl ?? null,
+        sendToUid, // ✅ fixed name
+      }),
+    });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok || j?.error) throw new Error(j?.error || "Failed to send voice message");
+    return j as SubmitResponse;
+  }
+
+  // MU → ONE EC (by email/phone)
+  const hasTarget =
     !!targetContact &&
     (!!(targetContact.email && targetContact.email.trim()) ||
       !!(targetContact.phone && targetContact.phone.trim()));
-
-  const endpoint = isTargeted
-    ? "/api/voice-message/send"      // send to ONE selected EC
-    : "/api/voice-check-in/notify";  // broadcast to ALL ACTIVE ECs
-
-  // Build request body; include target only for targeted route
-  const body: any = {
-    transcribedSpeech: currentTranscript,
-    assessment: aiAssessment,
-    audioDataUrl,
-  };
-  if (isTargeted) {
-    body.targetContact = {
-      email: targetContact?.email ?? null,
-      phone: targetContact?.phone ?? null,
-    };
+  if (hasTarget) {
+    const r = await fetch("/api/voice-message/send", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      credentials: "include",
+      body: JSON.stringify({
+        transcribedSpeech,
+        assessment,
+        audioDataUrl: audioDataUrl ?? null,
+        targetContact: {
+          email: targetContact?.email ?? null,
+          phone: targetContact?.phone ?? null,
+        },
+      }),
+    });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok || j?.error) throw new Error(j?.error || "Failed to send voice message");
+    return j as SubmitResponse;
   }
 
-  const response = await fetch(endpoint, {
+  // MU → ALL ECs (broadcast)
+  const r = await fetch("/api/voice-check-in/notify", {
     method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify(body),
+    headers: { "Content-Type": "application/json" },
+    credentials: "include",
+    body: JSON.stringify({
+      transcribedSpeech,
+      assessment,
+      audioDataUrl: audioDataUrl ?? null,
+    }),
   });
-
-  const data = await response.json().catch(() => ({}));
-
-  if (!response.ok || (data as any)?.error) {
-    throw new Error((data as any)?.error || "Failed to notify emergency contacts");
-  }
-
-  return data as NotifyContactsResponse;
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok || j?.error) throw new Error(j?.error || "Failed to notify emergency contacts");
+  return j as SubmitResponse;
 }
 
-/**
- * VoiceCheckIn
- * - Uses the browser Web Speech API (SpeechRecognition / webkitSpeechRecognition)
- * - Records a short utterance like “I’m OK”
- * - Sends the transcript to your AI function to assess anomalies
- * - Presents a simple status + explanation
- */
+/* --------------------------- Component --------------------------- */
+
 export interface VoiceCheckInProps {
+  /** Called after a successful submit (optional) */
   onCheckIn?: () => void | Promise<void>;
+  /** Main-user path: send to a chosen EC */
   targetContact?: {
     name?: string | null;
     email?: string | null;
     phone?: string | null;
   } | null;
   onClearTarget?: () => void;
+
+  /** Emergency-contact path: send to this main user */
+  sendToUid?: string | null;
 }
 
-export function VoiceCheckIn({ onCheckIn, targetContact, onClearTarget }: VoiceCheckInProps) {
-  /** UI/state flags */
-  const [isListening, setIsListening] = useState(false);       // mic actively capturing speech
-  const [isProcessing, setIsProcessing] = useState(false);     // AI is running
-  const [supported, setSupported] = useState<boolean>(true);   // browser support for speech API
+export function VoiceCheckIn({
+  onCheckIn,
+  targetContact,
+  onClearTarget,
+  sendToUid,
+}: VoiceCheckInProps) {
+  const [isListening, setIsListening] = useState(false);
+  const [isProcessing, setIsProcessing] = useState(false);
+  const [supported, setSupported] = useState<boolean>(true);
 
-  /** Latest transcript + AI assessment */
   const [transcript, setTranscript] = useState("");
   const [assessment, setAssessment] = useState<AssessVoiceCheckInOutput | null>(null);
 
-  /** We keep the recognition instance in a ref so it persists between renders */
-  const recognitionRef = useRef<any | null>(null); // use `any` to avoid TS issues with webkit prefix
+  const recognitionRef = useRef<any | null>(null);
   const { toast } = useToast();
 
-  /** Audio recording helpers so we can send the original clip to emergency contacts */
+  // Audio capture
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const mediaStreamRef = useRef<MediaStream | null>(null);
   const recordedChunksRef = useRef<Blob[]>([]);
   const audioPromiseRef = useRef<Promise<string | null> | null>(null);
-  const audioResolveRef = useRef<((value: string | null) => void) | null>(null);
+  const audioResolveRef = useRef<((v: string | null) => void) | null>(null);
   const lastAudioUrlRef = useRef<string | null>(null);
 
   async function blobToDataUrl(blob: Blob): Promise<string> {
@@ -128,25 +174,22 @@ export function VoiceCheckIn({ onCheckIn, targetContact, onClearTarget }: VoiceC
 
   async function startRecording() {
     if (typeof window === "undefined") return;
-    if (!navigator.mediaDevices?.getUserMedia) {
-      console.warn("MediaDevices API unavailable; voice clip will not be captured.");
-      return;
-    }
+    if (!navigator.mediaDevices?.getUserMedia) return;
 
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       mediaStreamRef.current = stream;
 
-      const preferredTypes = [
+      const preferred = [
         "audio/webm;codecs=opus",
         "audio/webm",
         "audio/ogg;codecs=opus",
       ];
       let mimeType: string | undefined;
       if (typeof MediaRecorder !== "undefined") {
-        mimeType = preferredTypes.find((type) => {
+        mimeType = preferred.find((t) => {
           try {
-            return MediaRecorder.isTypeSupported(type);
+            return MediaRecorder.isTypeSupported(t);
           } catch {
             return false;
           }
@@ -161,25 +204,19 @@ export function VoiceCheckIn({ onCheckIn, targetContact, onClearTarget }: VoiceC
       });
       lastAudioUrlRef.current = null;
 
-      recorder.ondataavailable = (event: BlobEvent) => {
-        if (event.data && event.data.size > 0) {
-          recordedChunksRef.current.push(event.data);
-        }
+      recorder.ondataavailable = (e: BlobEvent) => {
+        if (e.data && e.data.size > 0) recordedChunksRef.current.push(e.data);
       };
-
-      recorder.onerror = (event) => {
-        console.error("MediaRecorder error:", event);
+      recorder.onerror = () => {
         audioResolveRef.current?.(null);
         audioResolveRef.current = null;
         audioPromiseRef.current = null;
       };
-
       recorder.onstop = async () => {
         try {
           const mime = recorder.mimeType || mimeType || "audio/webm";
           const blob = new Blob(recordedChunksRef.current, { type: mime });
           recordedChunksRef.current = [];
-
           if (blob.size > 0) {
             const dataUrl = await blobToDataUrl(blob);
             lastAudioUrlRef.current = dataUrl;
@@ -188,75 +225,48 @@ export function VoiceCheckIn({ onCheckIn, targetContact, onClearTarget }: VoiceC
             lastAudioUrlRef.current = null;
             audioResolveRef.current?.(null);
           }
-        } catch (error) {
-          console.error("Failed to finalize audio clip:", error);
-          lastAudioUrlRef.current = null;
-          audioResolveRef.current?.(null);
         } finally {
           audioResolveRef.current = null;
           audioPromiseRef.current = null;
           mediaRecorderRef.current = null;
-
           if (mediaStreamRef.current) {
-            mediaStreamRef.current.getTracks().forEach((track) => track.stop());
+            mediaStreamRef.current.getTracks().forEach((t) => t.stop());
             mediaStreamRef.current = null;
           }
         }
       };
 
       recorder.start();
-    } catch (error) {
-      console.error("Unable to start audio recording:", error);
-      audioPromiseRef.current = null;
-      audioResolveRef.current = null;
-      mediaRecorderRef.current = null;
-      if (mediaStreamRef.current) {
-        mediaStreamRef.current.getTracks().forEach((track) => track.stop());
-        mediaStreamRef.current = null;
-      }
+    } catch {
+      // ignore – no mic available etc.
     }
   }
 
   function stopRecording(): Promise<string | null> {
     const recorder = mediaRecorderRef.current;
-    if (!recorder) {
+    if (!recorder || recorder.state === "inactive") {
       return audioPromiseRef.current ?? Promise.resolve(lastAudioUrlRef.current);
     }
-
-    if (recorder.state === "inactive") {
-      return audioPromiseRef.current ?? Promise.resolve(lastAudioUrlRef.current);
-    }
-
     const promise =
       audioPromiseRef.current ||
-      new Promise<string | null>((resolve) => {
-        audioResolveRef.current = resolve;
-      });
-
+      new Promise<string | null>((resolve) => (audioResolveRef.current = resolve));
     audioPromiseRef.current = promise;
-
     try {
       recorder.stop();
-    } catch (error) {
-      console.error("Failed to stop MediaRecorder:", error);
+    } catch {
       audioResolveRef.current?.(lastAudioUrlRef.current ?? null);
       audioResolveRef.current = null;
       audioPromiseRef.current = null;
       mediaRecorderRef.current = null;
       if (mediaStreamRef.current) {
-        mediaStreamRef.current.getTracks().forEach((track) => track.stop());
+        mediaStreamRef.current.getTracks().forEach((t) => t.stop());
         mediaStreamRef.current = null;
       }
       return Promise.resolve(lastAudioUrlRef.current);
     }
-
     return promise;
   }
 
-  /**
-   * Pull a few most-recent utterances from localStorage.
-   * (This is a simple stand-in for “previous messages” history.)
-   */
   function getPreviousMessages(): string[] {
     try {
       const raw = localStorage.getItem("voiceCheckIn.previous") || "[]";
@@ -266,151 +276,115 @@ export function VoiceCheckIn({ onCheckIn, targetContact, onClearTarget }: VoiceC
       return [];
     }
   }
-
-  /**
-   * Save the latest to localStorage, cap to last 5 utterances.
-   */
   function pushPreviousMessage(msg: string) {
     try {
       const prev = getPreviousMessages();
       const next = [...prev, msg].slice(-5);
       localStorage.setItem("voiceCheckIn.previous", JSON.stringify(next));
-    } catch {
-      /* ignore storage errors */
-    }
+    } catch {}
   }
 
-  /** One-time setup for SpeechRecognition */
+  /* -------------------- Speech setup -------------------- */
   useEffect(() => {
-    // Guard SSR (Next.js) – only run in the browser
     if (typeof window === "undefined") return;
-
-    // Vendor-prefixed constructor (Safari uses webkitSpeechRecognition)
     const RecognitionCtor: any =
       (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
-
-    // If not available, remember that and bail (we’ll show a friendly message in UI)
     if (!RecognitionCtor) {
       setSupported(false);
-      console.error("Speech Recognition API not supported in this browser.");
       return;
     }
 
-    // Create a recognition instance
     const recognition = new RecognitionCtor();
-    recognition.continuous = false;        // stop automatically after a result
-    recognition.lang = "en-US";            // language to listen for
-    recognition.interimResults = false;    // only final results
+    recognition.continuous = false;
+    recognition.lang = "en-US";
+    recognition.interimResults = false;
 
-    // Fired when the mic actually starts listening
     recognition.onstart = () => {
       setIsListening(true);
-      setAssessment(null); // clear any old AI result
-      setTranscript("");   // clear prior text
-      startRecording().catch((error) => {
-        console.error("Failed to start recording for voice clip:", error);
-      });
+      setAssessment(null);
+      setTranscript("");
+      startRecording().catch(() => null);
     };
 
-    // Fired when we receive a transcript (usually one result for short utterances)
     recognition.onresult = async (event: any) => {
       const currentTranscript: string = event.results?.[0]?.[0]?.transcript || "";
       setTranscript(currentTranscript);
       pushPreviousMessage(currentTranscript);
 
-      const audioClipPromise = stopRecording().catch((error) => {
-        console.error("Stopping recorder failed:", error);
-        return null;
-      });
-
+      const audioClipPromise = stopRecording().catch(() => null);
       setIsProcessing(true);
+
       try {
-        // Send to your AI function
         const previousVoiceMessages = getPreviousMessages();
-        const response = await fetch("/api/voice-check-in", {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({
-            transcribedSpeech: currentTranscript,
-            previousVoiceMessages,
-          }),
+
+        // Use the unified submitter
+        const submit = await submitVoice({
+          transcribedSpeech: currentTranscript,
+          previousVoiceMessages,
+          audioDataUrl: await audioClipPromise,
+          targetContact: targetContact
+            ? { email: targetContact.email ?? null, phone: targetContact.phone ?? null }
+            : null,
+          sendToUid, // when on EC dashboard
         });
 
-        if (!response.ok) {
-          throw new Error(`Voice assessment failed with status ${response.status}`);
-        }
-
-        const result: AssessVoiceCheckInOutput = await response.json();
-        setAssessment(result);
-
-        const audioClip = await audioClipPromise;
-
-        // 🔁 NEW: route selection (targeted vs broadcast)
+        // Also reflect the assessment in UI (cheap re-call just for text bubble)
         try {
-          const notifyResult = await notifyEmergencyContacts(
-            currentTranscript,
-            result,
-            audioClip,
-            targetContact
-              ? {
-                  email: targetContact.email ?? null,
-                  phone: targetContact.phone ?? null,
-                }
-              : null,
-          );
-
-          // Friendly toast copy for both cases
-          const targeted = !!targetContact?.name;
-          const notifiedCount = notifyResult?.contactCount ?? 0;
-          let description: string;
-
-          if (targeted) {
-            description = `Shared directly with ${targetContact!.name}.`;
-          } else if (notifiedCount > 0) {
-            description = `Shared with ${
-              notifiedCount === 1 ? "1 emergency contact" : `${notifiedCount} emergency contacts`
-            }.`;
-          } else {
-            description = "Saved to your emergency dashboard for quick review.";
-          }
-
-          const pushInfo = notifyResult?.anomalyPush;
-          if (result.anomalyDetected && pushInfo?.attempted) {
-            const success = pushInfo.successCount ?? 0;
-            const tokens = pushInfo.tokenCount ?? 0;
-            if (success > 0) {
-              description += " Emergency contacts received a push alert about the anomaly.";
-            } else if (tokens > 0) {
-              description += " We attempted push alerts, but delivery failed. Check contact device registrations.";
-            } else {
-              description += " None of your emergency contacts have push notifications enabled yet.";
-            }
-          }
-
-          toast({ title: "Voice message sent", description });
-        } catch (notifyError: any) {
-          console.error("Failed to notify emergency contacts:", notifyError);
-          toast({
-            title: "Voice message not delivered",
-            description: "We saved your analysis but couldn't reach your contacts.",
-            variant: "destructive",
+          const uiAssessRes = await fetch("/api/voice-check-in", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            credentials: "include",
+            body: JSON.stringify({
+              transcribedSpeech: currentTranscript,
+              previousVoiceMessages,
+            }),
           });
+          const uiAssess: AssessVoiceCheckInOutput = await uiAssessRes.json();
+          setAssessment(uiAssess);
+        } catch {
+          /* optional bubble; ignore errors */
         }
+
+        // Toast copy
+        const targeted = !!(targetContact?.name || sendToUid);
+        const notifiedCount = submit?.contactCount ?? 0;
+        let description: string;
+
+        if (targeted) {
+          description = "Shared directly.";
+        } else if (notifiedCount > 0) {
+          description =
+            notifiedCount === 1
+              ? "Shared with 1 emergency contact."
+              : `Shared with ${notifiedCount} emergency contacts.`;
+        } else {
+          description = "Saved for review.";
+        }
+
+        if (submit?.anomalyPush?.attempted) {
+          const success = submit.anomalyPush.successCount ?? 0;
+          const tokens = submit.anomalyPush.tokenCount ?? 0;
+          if (success > 0) {
+            description += " Push alert delivered.";
+          } else if (tokens > 0) {
+            description += " Push attempted but delivery failed.";
+          } else {
+            description += " No devices registered for push yet.";
+          }
+        }
+
+        toast({ title: "Voice message sent", description });
 
         if (onCheckIn) {
           try {
             await onCheckIn();
-          } catch (callbackError) {
-            console.error("Voice check-in callback failed:", callbackError);
-          }
+          } catch {}
         }
-      } catch (error) {
-        console.error("AI assessment failed:", error);
+      } catch (e) {
+        console.error("Submit failed:", e);
         toast({
-          title: "AI Error",
-          description: "Could not assess the voice message.",
+          title: "Voice message not delivered",
+          description: (e as any)?.message || "We couldn't reach the recipient.",
           variant: "destructive",
         });
       } finally {
@@ -418,37 +392,28 @@ export function VoiceCheckIn({ onCheckIn, targetContact, onClearTarget }: VoiceC
       }
     };
 
-    // Fired when recognition stops (either user stopped or it auto-stopped)
     recognition.onend = () => {
       setIsListening(false);
       stopRecording().catch(() => null);
     };
 
-    // Fired for recognition errors (permissions, network, no-speech, etc.)
     recognition.onerror = (event: any) => {
       const code = event?.error || "unknown";
-      console.error("Speech recognition error:", code);
-
-      // Make errors more friendly
       let message = "Could not recognize speech. Please try again.";
       if (code === "not-allowed" || code === "service-not-allowed") {
-        message = "Microphone permission was denied. Please allow mic access in your browser.";
+        message = "Microphone permission was denied. Please allow mic access.";
       } else if (code === "no-speech") {
-        message = "No speech detected. Try again and speak clearly into the microphone.";
+        message = "No speech detected. Try again and speak clearly.";
       } else if (code === "audio-capture") {
-        message = "No microphone found. Please check your audio device.";
+        message = "No microphone found.";
       }
-
       toast({ title: "Recognition Error", description: message, variant: "destructive" });
       setIsListening(false);
       setIsProcessing(false);
       stopRecording().catch(() => null);
     };
 
-    // Stash instance for button handlers
     recognitionRef.current = recognition;
-
-    // Cleanup on unmount – stop if still listening
     return () => {
       try {
         recognitionRef.current?.stop?.();
@@ -456,9 +421,10 @@ export function VoiceCheckIn({ onCheckIn, targetContact, onClearTarget }: VoiceC
       recognitionRef.current = null;
       stopRecording().catch(() => null);
     };
-  }, [targetContact, toast]);
+  }, [targetContact, sendToUid, toast]);
 
-  /** Start/stop listening button handler */
+  /* --------------------------- UI --------------------------- */
+
   const handleToggleListening = () => {
     if (!supported) {
       toast({
@@ -470,18 +436,13 @@ export function VoiceCheckIn({ onCheckIn, targetContact, onClearTarget }: VoiceC
       return;
     }
     try {
-      if (isListening) {
-        recognitionRef.current?.stop?.();
-      } else {
-        // Starting may trigger a permission prompt the first time
-        recognitionRef.current?.start?.();
-      }
+      if (isListening) recognitionRef.current?.stop?.();
+      else recognitionRef.current?.start?.();
     } catch (e) {
       console.error(e);
     }
   };
 
-  /** Small helpers for UI state */
   const getStatusIcon = () => {
     if (isProcessing) return <Loader className="h-8 w-8 animate-spin text-primary" />;
     if (assessment) {
@@ -504,16 +465,15 @@ export function VoiceCheckIn({ onCheckIn, targetContact, onClearTarget }: VoiceC
 
   return (
     <div className="flex h-full w-full flex-col items-center justify-center gap-6 text-center">
-      {/* Visual status circle */}
       <div className="flex h-32 w-32 items-center justify-center rounded-full bg-secondary shadow-inner">
         {getStatusIcon()}
       </div>
 
-      {/* ARIA live region so screen readers announce changes */}
       <p className="text-2xl font-semibold text-muted-foreground" aria-live="polite">
         {getStatusText()}
       </p>
 
+      {/* When MU targets a specific EC we show their details; EC→MU path doesn't need this */}
       {targetContact?.name && (
         <div className="flex w-full max-w-md flex-col items-center gap-2 rounded-md bg-primary/5 p-3 text-sm text-muted-foreground">
           <p>
@@ -521,14 +481,10 @@ export function VoiceCheckIn({ onCheckIn, targetContact, onClearTarget }: VoiceC
           </p>
           <div className="flex flex-wrap justify-center gap-2 text-xs">
             {targetContact.email && (
-              <span className="rounded-full bg-background px-3 py-1">
-                {targetContact.email}
-              </span>
+              <span className="rounded-full bg-background px-3 py-1">{targetContact.email}</span>
             )}
             {targetContact.phone && (
-              <span className="rounded-full bg-background px-3 py-1">
-                {targetContact.phone}
-              </span>
+              <span className="rounded-full bg-background px-3 py-1">{targetContact.phone}</span>
             )}
           </div>
           {onClearTarget && (
@@ -539,10 +495,8 @@ export function VoiceCheckIn({ onCheckIn, targetContact, onClearTarget }: VoiceC
         </div>
       )}
 
-      {/* Show transcript once we have one */}
       {transcript && <p className="text-base text-muted-foreground">You said: “{transcript}”</p>}
 
-      {/* AI explanation (green for OK, red for anomaly) */}
       {assessment?.explanation && (
         <p
           className={`rounded-md p-3 text-base ${
@@ -553,7 +507,6 @@ export function VoiceCheckIn({ onCheckIn, targetContact, onClearTarget }: VoiceC
         </p>
       )}
 
-      {/* Start/Stop button */}
       <Button
         size="lg"
         onClick={handleToggleListening}
@@ -565,11 +518,8 @@ export function VoiceCheckIn({ onCheckIn, targetContact, onClearTarget }: VoiceC
         {isListening ? "Stop" : "Start"}
       </Button>
 
-      {/* Tiny hint when unsupported */}
       {!supported && (
-        <p className="text-sm text-muted-foreground">
-          Tip: Try the latest Chrome/Edge/Safari over HTTPS.
-        </p>
+        <p className="text-sm text-muted-foreground">Tip: Try the latest Chrome/Edge/Safari over HTTPS.</p>
       )}
     </div>
   );

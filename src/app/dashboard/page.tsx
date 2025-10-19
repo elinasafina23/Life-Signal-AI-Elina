@@ -12,7 +12,7 @@
 // It also integrates with browser APIs for geolocation and push notifications.
 "use client"; // Client component so we can use hooks, browser APIs
 
-import React, { useCallback, useEffect, useMemo, useRef, useState } from "react"; // React + hooks
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 // --- Firestore (realtime + updates used elsewhere on the page) ---
 import {
@@ -23,6 +23,7 @@ import {
   updateDoc,
   serverTimestamp,
   deleteField,
+  Firestore,
 } from "firebase/firestore";
 // --- Firestore (query helpers used for latest contact voice message in dialog) ---
 import {
@@ -34,16 +35,16 @@ import {
   where,
 } from "firebase/firestore";
 
-import { onAuthStateChanged } from "firebase/auth";             // Firebase Auth observer
-import { useRouter } from "next/navigation";                   // App Router navigation
-import { auth, db } from "@/firebase";                         // Client Firebase (Auth + Firestore)
+import { onAuthStateChanged } from "firebase/auth";
+import { useRouter } from "next/navigation";
+import { auth, db } from "@/firebase";
 
-import { Header } from "@/components/header";                  // Top nav
-import { Footer } from "@/components/footer";                  // Footer
-import { VoiceCheckIn } from "@/components/voice-check-in";    // Voice recording widget
-import { AskAiAssistant } from "@/components/ask-ai-assistant";// Ask-AI widget
-import { EmergencyContacts } from "@/components/emergency-contact"; // Right-panel EC editor
-import { useSosDialer } from "@/hooks/useSosDialer";           // Press-and-hold SOS dialer
+import { Header } from "@/components/header";
+import { Footer } from "@/components/footer";
+import { VoiceCheckIn } from "@/components/voice-check-in";
+import { AskAiAssistant } from "@/components/ask-ai-assistant";
+import { EmergencyContacts } from "@/components/emergency-contact";
+import { useSosDialer } from "@/hooks/useSosDialer";
 
 // Emergency services catalog
 import {
@@ -151,6 +152,7 @@ type ContactDialogState = {
   phone: string | null;
   email: string | null;
 };
+
 type LatestVoiceFromContact =
   | {
       audioUrl: string;
@@ -164,7 +166,7 @@ const EMERGENCY_DASH = "/emergency-dashboard"; // Route used if an EC tries to o
 const toEpochMinutes = (ms: number) => Math.floor(ms / 60000); // Helper to compute dueAtMin
 
 const HOURS_OPTIONS = [1, 2, 3, 6, 10, 12, 18, 24] as const; // Allowed check-in intervals (hrs)
-const LOCATION_SHARE_COOLDOWN_MS = 60_000;                    // Throttle repeated shares
+const LOCATION_SHARE_COOLDOWN_MS = 60_000; // Throttle repeated shares
 const GEO_PERMISSION_DENIED = 1;
 const GEO_POSITION_UNAVAILABLE = 2;
 const GEO_TIMEOUT = 3;
@@ -205,7 +207,9 @@ async function ensureGeoAllowed(): Promise<true | false | "prompt"> {
   const navAny = navigator as any;
   if (!navAny.permissions?.query) return true; // No Permissions API → assume ok
   try {
-    const status: PermissionStatus = await navAny.permissions.query({ name: "geolocation" as any });
+    const status: PermissionStatus = await navAny.permissions.query({
+      name: "geolocation" as any,
+    });
     if (status.state === "granted") return true;
     if (status.state === "prompt") return "prompt";
     return false;
@@ -239,8 +243,8 @@ async function triggerServerTelnyxCall(params: {
 
 // ======================= PAGE =======================
 export default function DashboardPage() {
-  const router = useRouter();        // Router
-  const { toast } = useToast();      // Toasts
+  const router = useRouter();
+  const { toast } = useToast();
 
   // ---- Check-in state ----
   const [lastCheckIn, setLastCheckIn] = useState<Date | null>(null);
@@ -288,7 +292,7 @@ export default function DashboardPage() {
   const lastLocationShareRef = useRef<{ reason: LocationShareReason; ts: number } | null>(null);
   const prevEscalationActiveRef = useRef(false);
 
-  // ---- NEW: Contact Dialog state (tiles → pop-out) ----
+  // ---- Contact Dialog (tiles → pop-out) ----
   const [contactDialog, setContactDialog] = useState<ContactDialogState>({
     open: false,
     kind: null,
@@ -414,9 +418,9 @@ export default function DashboardPage() {
         const storedPhone = typeof data.phone === "string" ? sanitizePhone(data.phone) : "";
         setPhoneDraft((prev) => {
           const prevSan = sanitizePhone(prev);
-          if (!prevSan) return storedPhone;         // empty → load from DB
+          if (!prevSan) return storedPhone; // empty → load from DB
           if (prevSan === storedPhone) return storedPhone; // same → keep normalized
-          return prev;                               // otherwise preserve local edits
+          return prev; // otherwise preserve local edits
         });
         setSavedPhone(storedPhone);
 
@@ -436,7 +440,9 @@ export default function DashboardPage() {
 
           const first2 = (contacts.contact2_firstName || "").trim();
           const last2 = (contacts.contact2_lastName || "").trim();
-          setSecondaryEmergencyContactName([first2, last2].filter(Boolean).join(" ") || "Emergency Contact 2");
+          setSecondaryEmergencyContactName(
+            [first2, last2].filter(Boolean).join(" ") || "Emergency Contact 2",
+          );
           setSecondaryEmergencyContactPhone(
             contacts.contact2_phone ? sanitizePhone(contacts.contact2_phone) || null : null,
           );
@@ -565,12 +571,16 @@ export default function DashboardPage() {
 
   // ---- Try to capture device location (with throttle + permission UX) ----
   const captureLocation = useCallback(
-    async (reason: LocationShareReason, options: { silentIfDisabled?: boolean } = {}): Promise<CaptureLocationResult> => {
+    async (
+      reason: LocationShareReason,
+      options: { silentIfDisabled?: boolean } = {},
+    ): Promise<CaptureLocationResult> => {
       if (locationSharing === false) {
         if (!options.silentIfDisabled) {
           toast({
             title: "Location sharing disabled",
-            description: "Enable location sharing in settings to send your location during SOS alerts.",
+            description:
+              "Enable location sharing in settings to send your location during SOS alerts.",
             variant: "destructive",
           });
         }
@@ -579,7 +589,8 @@ export default function DashboardPage() {
       if (typeof window === "undefined" || !("geolocation" in navigator)) {
         toast({
           title: "Location unavailable",
-          description: "Your device does not support location services. Try another device.",
+          description:
+            "Your device does not support location services. Try another device.",
           variant: "destructive",
         });
         return { status: "skipped" };
@@ -588,14 +599,18 @@ export default function DashboardPage() {
       if (perm === false) {
         toast({
           title: "Location denied in browser",
-          description: "Please enable location access for this site in your browser settings.",
+          description:
+            "Please enable location access for this site in your browser settings.",
           variant: "destructive",
         });
         return { status: "skipped" };
       }
       const last = lastLocationShareRef.current;
       const throttled =
-        reason !== "sos" && last && last.reason === reason && Date.now() - last.ts < LOCATION_SHARE_COOLDOWN_MS;
+        reason !== "sos" &&
+        last &&
+        last.reason === reason &&
+        Date.now() - last.ts < LOCATION_SHARE_COOLDOWN_MS;
       if (throttled) return { status: "throttled" };
 
       setSharingLocation(true);
@@ -611,7 +626,11 @@ export default function DashboardPage() {
         const locationString = `${latitude.toFixed(6)},${longitude.toFixed(6)}`;
         return { status: "shared", location: locationString };
       } catch (error) {
-        toast({ title: "Location sharing failed", description: describeGeoError(error), variant: "destructive" });
+        toast({
+          title: "Location sharing failed",
+          description: describeGeoError(error),
+          variant: "destructive",
+        });
         return { status: "skipped" };
       } finally {
         setSharingLocation(false);
@@ -625,7 +644,11 @@ export default function DashboardPage() {
     async (reason: LocationShareReason, opts?: { silentIfDisabled?: boolean }) => {
       const ref = userRef.current;
       if (!ref) {
-        toast({ title: "Not signed in", description: "Please log in again to share your location.", variant: "destructive" });
+        toast({
+          title: "Not signed in",
+          description: "Please log in again to share your location.",
+          variant: "destructive",
+        });
         return false;
       }
       const result = await captureLocation(reason, opts);
@@ -650,7 +673,11 @@ export default function DashboardPage() {
         });
         return true;
       } catch (error) {
-        toast({ title: "Location sharing failed", description: describeGeoError(error), variant: "destructive" });
+        toast({
+          title: "Location sharing failed",
+          description: describeGeoError(error),
+          variant: "destructive",
+        });
         return false;
       }
     },
@@ -660,7 +687,12 @@ export default function DashboardPage() {
   // ---- Enable/disable location consent ----
   const enableLocationSharing = useCallback(async () => {
     const ref = userRef.current;
-    if (!ref) return toast({ title: "Not signed in", description: "Please log in again.", variant: "destructive" });
+    if (!ref)
+      return toast({
+        title: "Not signed in",
+        description: "Please log in again.",
+        variant: "destructive",
+      });
     if (typeof window === "undefined" || !("geolocation" in navigator))
       return toast({
         title: "Location unavailable",
@@ -674,19 +706,30 @@ export default function DashboardPage() {
       if (perm === false)
         return toast({
           title: "Location denied in browser",
-          description: "Enable location access for this site in your browser settings.",
+          description:
+            "Enable location access for this site in your browser settings.",
           variant: "destructive",
         });
       if (perm === "prompt") {
         await new Promise<GeolocationPosition>((resolve, reject) =>
-          navigator.geolocation.getCurrentPosition(resolve, reject, { enableHighAccuracy: true, timeout: 15000 }),
+          navigator.geolocation.getCurrentPosition(resolve, reject, {
+            enableHighAccuracy: true,
+            timeout: 15000,
+          }),
         );
       }
       await updateDoc(ref, { locationSharing: true });
       setLocationSharing(true);
-      toast({ title: "Location sharing enabled", description: "We only share it during alerts." });
+      toast({
+        title: "Location sharing enabled",
+        description: "We only share it during alerts.",
+      });
     } catch (error) {
-      toast({ title: "Location permission needed", description: describeGeoError(error), variant: "destructive" });
+      toast({
+        title: "Location permission needed",
+        description: describeGeoError(error),
+        variant: "destructive",
+      });
     } finally {
       setLocationMutationPending(false);
     }
@@ -694,7 +737,12 @@ export default function DashboardPage() {
 
   const disableLocationSharing = useCallback(async () => {
     const ref = userRef.current;
-    if (!ref) return toast({ title: "Not signed in", description: "Please log in again.", variant: "destructive" });
+    if (!ref)
+      return toast({
+        title: "Not signed in",
+        description: "Please log in again.",
+        variant: "destructive",
+      });
     setLocationMutationPending(true);
     try {
       await updateDoc(ref, {
@@ -707,9 +755,16 @@ export default function DashboardPage() {
       setLocationSharing(false);
       setLocationShareReason(null);
       setLocationSharedAt(null);
-      toast({ title: "Location sharing disabled", description: "Cleared the last shared location." });
+      toast({
+        title: "Location sharing disabled",
+        description: "Cleared the last shared location.",
+      });
     } catch (error: any) {
-      toast({ title: "Unable to update location settings", description: error?.message ?? "Please try again.", variant: "destructive" });
+      toast({
+        title: "Unable to update location settings",
+        description: error?.message ?? "Please try again.",
+        variant: "destructive",
+      });
     } finally {
       setLocationMutationPending(false);
     }
@@ -720,9 +775,16 @@ export default function DashboardPage() {
     setClearingLocation(true);
     try {
       await clearSharedLocation();
-      toast({ title: "Location cleared", description: "Removed from the emergency dashboard." });
+      toast({
+        title: "Location cleared",
+        description: "Removed from the emergency dashboard.",
+      });
     } catch (error: any) {
-      toast({ title: "Unable to clear location", description: error?.message ?? "Please try again.", variant: "destructive" });
+      toast({
+        title: "Unable to clear location",
+        description: error?.message ?? "Please try again.",
+        variant: "destructive",
+      });
     } finally {
       setClearingLocation(false);
     }
@@ -731,7 +793,12 @@ export default function DashboardPage() {
   // ---- SOS flow ----
   const triggerSos = useCallback(async () => {
     const ref = userRef.current;
-    if (!ref) return toast({ title: "Not signed in", description: "Please log in again.", variant: "destructive" });
+    if (!ref)
+      return toast({
+        title: "Not signed in",
+        description: "Please log in again.",
+        variant: "destructive",
+      });
 
     const locationResult = await captureLocation("sos");
     const updates: Record<string, any> = { sosTriggeredAt: serverTimestamp() };
@@ -745,7 +812,11 @@ export default function DashboardPage() {
     try {
       await updateDoc(ref, updates);
     } catch (error: any) {
-      toast({ title: "SOS alert not recorded", description: error?.message ?? "Try again.", variant: "destructive" });
+      toast({
+        title: "SOS alert not recorded",
+        description: error?.message ?? "Try again.",
+        variant: "destructive",
+      });
       locationSaved = false;
     }
 
@@ -758,7 +829,10 @@ export default function DashboardPage() {
 
     if (primaryEmergencyContactPhone) {
       try {
-        await triggerServerTelnyxCall({ to: primaryEmergencyContactPhone, mainUserUid: mainUserUid ?? undefined });
+        await triggerServerTelnyxCall({
+          to: primaryEmergencyContactPhone,
+          mainUserUid: mainUserUid ?? undefined,
+        });
       } catch (err: any) {
         toast({
           title: "Emergency contact call failed",
@@ -769,11 +843,19 @@ export default function DashboardPage() {
     } else {
       toast({
         title: "Emergency contact number missing",
-        description: `Add a phone number for ${primaryEmergencyContactName || "your emergency contact"}.`,
+        description: `Add a phone number for ${
+          primaryEmergencyContactName || "your emergency contact"
+        }.`,
         variant: "destructive",
       });
     }
-  }, [captureLocation, toast, mainUserUid, primaryEmergencyContactPhone, primaryEmergencyContactName]);
+  }, [
+    captureLocation,
+    toast,
+    mainUserUid,
+    primaryEmergencyContactPhone,
+    primaryEmergencyContactName,
+  ]);
 
   // ---- SOS press-and-hold binding ----
   const { bind, holding, progress } = useSosDialer({
@@ -781,9 +863,11 @@ export default function DashboardPage() {
     contactName: `Emergency services (${emergencyService.dial})`,
     holdToActivateMs: 1500,
     confirm: true,
-    onActivate: () => { void triggerSos(); }, // <- ensure the handler returns void
+    onActivate: () => {
+      void triggerSos();
+    },
   });
-  const ready = (progress ?? 0) >= 0.999; // Dialer progress ring
+  const ready = (progress ?? 0) >= 0.999;
   const phoneDirty = sanitizePhone(phoneDraft) !== savedPhone;
 
   // ---- Auto share/clear on escalation begin/end ----
@@ -792,7 +876,9 @@ export default function DashboardPage() {
     const isActive = Boolean(escalationActiveAt);
     if (isActive && !wasActive) void shareLocation("escalation", { silentIfDisabled: true });
     else if (!isActive && wasActive) {
-      clearSharedLocation().catch((e) => console.error("Failed to clear shared location after escalation", e));
+      clearSharedLocation().catch((e) =>
+        console.error("Failed to clear shared location after escalation", e),
+      );
     }
     prevEscalationActiveRef.current = isActive;
   }, [escalationActiveAt, shareLocation, clearSharedLocation]);
@@ -802,7 +888,8 @@ export default function DashboardPage() {
     async ({ showToast = true }: { showToast?: boolean } = {}) => {
       try {
         if (!userRef.current) throw new Error("Not signed in");
-        const intervalMin = Number.isFinite(intervalMinutes) && intervalMinutes > 0 ? intervalMinutes : 720;
+        const intervalMin =
+          Number.isFinite(intervalMinutes) && intervalMinutes > 0 ? intervalMinutes : 720;
         const dueAtMin = toEpochMinutes(Date.now()) + intervalMin;
 
         setLastCheckIn(new Date()); // Optimistic
@@ -820,9 +907,17 @@ export default function DashboardPage() {
           } catch {}
         }
 
-        if (showToast) toast({ title: "Checked In!", description: "Your status has been updated to 'OK'." });
+        if (showToast)
+          toast({
+            title: "Checked In!",
+            description: "Your status has been updated to 'OK'.",
+          });
       } catch (e: any) {
-        toast({ title: "Check-in failed", description: e?.message ?? "Please try again.", variant: "destructive" });
+        toast({
+          title: "Check-in failed",
+          description: e?.message ?? "Please try again.",
+          variant: "destructive",
+        });
         throw e;
       }
     },
@@ -847,13 +942,18 @@ export default function DashboardPage() {
       if (!phone && !email) {
         toast({
           title: "Add contact details",
-          description: "Provide a phone number or email to send them a voice message.",
+          description:
+            "Provide a phone number or email to send them a voice message.",
           variant: "destructive",
         });
         return;
       }
 
-      setVoiceMessageTarget({ name, phone: phone || undefined, email: email || undefined });
+      setVoiceMessageTarget({
+        name,
+        phone: phone || undefined,
+        email: email || undefined,
+      });
       setQuickVoiceDialogOpen(true);
     },
     [
@@ -893,33 +993,66 @@ export default function DashboardPage() {
       if (!userRef.current) throw new Error("Not signed in");
       const baseMs = lastCheckIn?.getTime?.() ?? Date.now();
       const newDueAtMin = toEpochMinutes(baseMs) + minutes;
-      await updateDoc(userRef.current, { checkinInterval: minutes, dueAtMin: newDueAtMin });
-      toast({ title: "Check-in Interval Updated", description: `Every ${hours} hours.` });
+      await updateDoc(userRef.current, {
+        checkinInterval: minutes,
+        dueAtMin: newDueAtMin,
+      });
+      toast({
+        title: "Check-in Interval Updated",
+        description: `Every ${hours} hours.`,
+      });
     } catch (e: any) {
-      toast({ title: "Update failed", description: e?.message ?? "Please try again.", variant: "destructive" });
+      toast({
+        title: "Update failed",
+        description: e?.message ?? "Please try again.",
+        variant: "destructive",
+      });
     }
   };
 
   // ---- Save main user's phone ----
   const handlePhoneSave = useCallback(async () => {
-    if (!userRef.current) return toast({ title: "Not signed in", description: "Please log in again.", variant: "destructive" });
+    if (!userRef.current)
+      return toast({
+        title: "Not signed in",
+        description: "Please log in again.",
+        variant: "destructive",
+      });
     const sanitized = sanitizePhone(phoneDraft);
     if (sanitized && !isValidE164Phone(sanitized)) {
-      return toast({ title: "Invalid phone number", description: "Use format like +15551234567.", variant: "destructive" });
+      return toast({
+        title: "Invalid phone number",
+        description: "Use format like +15551234567.",
+        variant: "destructive",
+      });
     }
     setPhoneSaving(true);
     try {
-      await updateDoc(userRef.current, sanitized ? { phone: sanitized, updatedAt: serverTimestamp() } : { phone: deleteField(), updatedAt: serverTimestamp() });
+      await updateDoc(
+        userRef.current,
+        sanitized
+          ? { phone: sanitized, updatedAt: serverTimestamp() }
+          : { phone: deleteField(), updatedAt: serverTimestamp() },
+      );
       setSavedPhone(sanitized);
       setPhoneDraft(sanitized);
       toast({
         title: "Phone number updated",
-        description: sanitized ? "Emergency contacts will call this number." : "Phone number removed.",
+        description: sanitized
+          ? "Emergency contacts will call this number."
+          : "Phone number removed.",
       });
     } catch (error: any) {
-      toast({ title: "Update failed", description: error?.message ?? "Please try again.", variant: "destructive" });
+      toast({
+        title: "Update failed",
+        description: error?.message ?? "Please try again.",
+        variant: "destructive",
+      });
     } finally {
-      if (typeof document !== "undefined" && document.activeElement instanceof HTMLElement) {
+      if (
+        typeof document !== "undefined" &&
+        document.activeElement instanceof HTMLElement
+      ) {
         document.activeElement.blur();
       }
       setPhoneSaving(false);
@@ -944,10 +1077,12 @@ export default function DashboardPage() {
         return;
       }
       try {
+        // Use a composite query if both are available, otherwise query by the available field.
+        // Note: Firestore queries with OR conditions require an index.
+        // Note: The "fromEmergencyContactUid" field will be added later when EC accounts are implemented.
         const q = fsQuery(
-          collectionGroup(db, "voiceMessages"),
-          where("toUid", "==", mainUserUid),
-          where("fromEmail", "==", email),
+          collection(db, `users/${mainUserUid}/contactVoiceMessages`),
+          where("fromEmail", "==", email), // EC UID will be added here later
           orderBy("createdAt", "desc"),
           limit(1),
         );
@@ -1045,7 +1180,7 @@ export default function DashboardPage() {
         </DialogContent>
       </Dialog>
 
-      {/* NEW: Contact actions dialog opened from the tiles */}
+      {/* Contact actions dialog opened from the tiles */}
       <Dialog
         open={contactDialog.open}
         onOpenChange={(open) => {
@@ -1055,7 +1190,9 @@ export default function DashboardPage() {
         <DialogContent className="sm:max-w-lg">
           <DialogHeader className="space-y-1.5">
             <DialogTitle>Contact details</DialogTitle>
-            <DialogDescription>Quick actions for {contactDialog.name || "this contact"}.</DialogDescription>
+            <DialogDescription>
+              Quick actions for {contactDialog.name || "this contact"}.
+            </DialogDescription>
           </DialogHeader>
 
           <div className="space-y-4 text-left">
@@ -1087,7 +1224,9 @@ export default function DashboardPage() {
                 type="button"
                 variant="outline"
                 onClick={() =>
-                  handleVoiceMessageContact(contactDialog.kind === "primary" ? "primary" : "secondary")
+                  handleVoiceMessageContact(
+                    contactDialog.kind === "primary" ? "primary" : "secondary",
+                  )
                 }
                 disabled={!contactDialog.phone && !contactDialog.email}
                 className="w-full"
@@ -1100,7 +1239,9 @@ export default function DashboardPage() {
             {/* Latest voice from this contact (if found) */}
             {latestVoiceFromContact ? (
               <div className="rounded-md border p-3">
-                <p className="text-sm font-semibold">Latest message from {contactDialog.name}</p>
+                <p className="text-sm font-semibold">
+                  Latest message from {contactDialog.name}
+                </p>
                 {latestVoiceFromContact.transcript && (
                   <p className="mt-1 text-sm text-muted-foreground italic">
                     “{latestVoiceFromContact.transcript}”
@@ -1154,7 +1295,9 @@ export default function DashboardPage() {
                 </div>
               </div>
             ) : (
-              <p className="text-sm text-muted-foreground">No recent voice message from this contact.</p>
+              <p className="text-sm text-muted-foreground">
+                No recent voice message from this contact.
+              </p>
             )}
 
             {/* Shortcut to manage contact details */}
@@ -1163,7 +1306,7 @@ export default function DashboardPage() {
                 variant="ghost"
                 className="gap-2"
                 onClick={() => {
-                  router.push("/emergency-settings"); // Jump to your EC settings page
+                  router.push("/emergency-settings");
                 }}
               >
                 <Settings className="h-4 w-4" /> Edit contact details
@@ -1246,10 +1389,16 @@ export default function DashboardPage() {
                 </CardHeader>
                 <CardContent className="flex flex-1 flex-col items-center justify-center gap-8 text-center">
                   <div className="flex flex-col items-center gap-4">
-                    <Button onClick={() => handleCheckIn()} size="lg" className="h-28 w-28 md:h-32 md:w-32 rounded-full text-2xl shadow-lg bg-green-500 hover:bg-green-600">
+                    <Button
+                      onClick={() => handleCheckIn()}
+                      size="lg"
+                      className="h-28 w-28 md:h-32 md:w-32 rounded-full text-2xl shadow-lg bg-green-500 hover:bg-green-600"
+                    >
                       <CheckCircle2 className="h-14 w-14 md:h-16 md:w-16" />
                     </Button>
-                    <p className="text-2xl font-semibold text-muted-foreground">Press the button to check in.</p>
+                    <p className="text-2xl font-semibold text-muted-foreground">
+                      Press the button to check in.
+                    </p>
                   </div>
                 </CardContent>
               </Card>
@@ -1259,7 +1408,9 @@ export default function DashboardPage() {
                 <CardHeader className={`${PRIMARY_CARD_HEADER_CLASSES} items-center`}>
                   <Clock className="mx-auto h-10 w-10 text-muted-foreground" aria-hidden />
                   <CardTitle className={PRIMARY_CARD_TITLE_CLASSES}>Status Overview</CardTitle>
-                  <CardDescription className={PRIMARY_CARD_DESCRIPTION_CLASSES}>Keep tabs on your latest check-in and countdown.</CardDescription>
+                  <CardDescription className={PRIMARY_CARD_DESCRIPTION_CLASSES}>
+                    Keep tabs on your latest check-in and countdown.
+                  </CardDescription>
                 </CardHeader>
                 <CardContent className="flex flex-1 flex-col justify-center">
                   <dl className="grid gap-4 text-base sm:grid-cols-2">
@@ -1273,11 +1424,21 @@ export default function DashboardPage() {
                     </div>
                     <div className="space-y-1">
                       <dt className="text-sm text-muted-foreground">Countdown</dt>
-                      <dd className={`text-lg font-semibold ${status === "missed" ? "text-destructive" : "text-primary"}`}>{timeLeft || "—"}</dd>
+                      <dd className={`text-lg font-semibold ${status === "missed" ? "text-destructive" : "text-primary"}`}>
+                        {timeLeft || "—"}
+                      </dd>
                     </div>
                     <div className="space-y-1">
                       <dt className="text-sm text-muted-foreground">Status</dt>
-                      <dd className={`text-lg font-semibold ${status === "safe" ? "text-green-600" : status === "missed" ? "text-destructive" : "text-muted-foreground"}`}>
+                      <dd
+                        className={`text-lg font-semibold ${
+                          status === "safe"
+                            ? "text-green-600"
+                            : status === "missed"
+                            ? "text-destructive"
+                            : "text-muted-foreground"
+                        }`}
+                      >
                         {status.toUpperCase()}
                       </dd>
                     </div>
@@ -1285,7 +1446,11 @@ export default function DashboardPage() {
                       <dt className="text-sm text-muted-foreground">Location sharing</dt>
                       <dd
                         className={`text-lg font-semibold ${
-                          locationSharing === true ? "text-green-600" : locationSharing === false ? "text-destructive" : "text-muted-foreground"
+                          locationSharing === true
+                            ? "text-green-600"
+                            : locationSharing === false
+                            ? "text-destructive"
+                            : "text-muted-foreground"
                         }`}
                       >
                         {locationSharing === null ? "—" : locationSharing ? "Enabled" : "Disabled"}
@@ -1295,7 +1460,7 @@ export default function DashboardPage() {
                 </CardContent>
               </Card>
 
-              {/* Voice Update card */}
+              {/* Voice Update card (broadcast) */}
               <Card id="voice-update-card" className={`${PRIMARY_CARD_BASE_CLASSES} text-center`}>
                 <CardHeader className={`${PRIMARY_CARD_HEADER_CLASSES} items-center`}>
                   <Mic className="mx-auto h-10 w-10 text-muted-foreground" aria-hidden />
@@ -1325,7 +1490,7 @@ export default function DashboardPage() {
                 </CardContent>
               </Card>
 
-              {/* >>> NEW Emergency Contacts tiles (click → pop-out dialog above) <<< */}
+              {/* Emergency Contacts tiles (click → pop-out dialog above) */}
               <Card className={`${PRIMARY_CARD_BASE_CLASSES} text-center`}>
                 <CardHeader className={`${PRIMARY_CARD_HEADER_CLASSES} items-center`}>
                   <PhoneCall className="mx-auto h-10 w-10 text-muted-foreground" aria-hidden />
@@ -1343,9 +1508,13 @@ export default function DashboardPage() {
                       className="h-28 rounded-xl border text-left flex flex-col items-start justify-center px-4"
                       onClick={() => openContactDialog("primary")}
                     >
-                      <span className="text-lg font-semibold">{primaryEmergencyContactName}</span>
+                      <span className="text-lg font-semibold">
+                        {primaryEmergencyContactName}
+                      </span>
                       <span className="text-sm text-muted-foreground">
-                        {primaryEmergencyContactPhone || primaryEmergencyContactEmail || "No details yet"}
+                        {primaryEmergencyContactPhone ||
+                          primaryEmergencyContactEmail ||
+                          "No details yet"}
                       </span>
                     </Button>
 
@@ -1356,9 +1525,13 @@ export default function DashboardPage() {
                       className="h-28 rounded-xl border text-left flex flex-col items-start justify-center px-4"
                       onClick={() => openContactDialog("secondary")}
                     >
-                      <span className="text-lg font-semibold">{secondaryEmergencyContactName}</span>
+                      <span className="text-lg font-semibold">
+                        {secondaryEmergencyContactName}
+                      </span>
                       <span className="text-sm text-muted-foreground">
-                        {secondaryEmergencyContactPhone || secondaryEmergencyContactEmail || "No details yet"}
+                        {secondaryEmergencyContactPhone ||
+                          secondaryEmergencyContactEmail ||
+                          "No details yet"}
                       </span>
                     </Button>
                   </div>
@@ -1386,7 +1559,9 @@ export default function DashboardPage() {
               <Card className="p-4 shadow-lg">
                 <CardHeader className="pb-4">
                   <CardTitle className="text-2xl font-headline">Your Settings</CardTitle>
-                  <CardDescription>Manage how you stay connected with your emergency contacts.</CardDescription>
+                  <CardDescription>
+                    Manage how you stay connected with your emergency contacts.
+                  </CardDescription>
                 </CardHeader>
                 <CardContent className="space-y-6">
                   {/* Phone settings */}
@@ -1401,13 +1576,27 @@ export default function DashboardPage() {
                         disabled={phoneSaving}
                         inputMode="tel"
                       />
-                      <p className="text-xs text-muted-foreground">Include country code. We’ll auto-format for emergency contacts.</p>
+                      <p className="text-xs text-muted-foreground">
+                        Include country code. We’ll auto-format for emergency contacts.
+                      </p>
                     </div>
                     <div className="flex flex-col gap-2 sm:flex-row">
-                      <Button type="button" onMouseDown={(e) => e.preventDefault()} onClick={handlePhoneSave} disabled={phoneSaving || !phoneDirty} className="sm:flex-1">
+                      <Button
+                        type="button"
+                        onMouseDown={(e) => e.preventDefault()}
+                        onClick={handlePhoneSave}
+                        disabled={phoneSaving || !phoneDirty}
+                        className="sm:flex-1"
+                      >
                         {phoneSaving ? "Saving…" : "Save number"}
                       </Button>
-                      <Button type="button" variant="outline" onMouseDown={(e) => e.preventDefault()} onClick={handlePhoneReset} disabled={phoneSaving || !phoneDirty}>
+                      <Button
+                        type="button"
+                        variant="outline"
+                        onMouseDown={(e) => e.preventDefault()}
+                        onClick={handlePhoneReset}
+                        disabled={phoneSaving || !phoneDirty}
+                      >
                         Cancel
                       </Button>
                     </div>
@@ -1420,7 +1609,9 @@ export default function DashboardPage() {
                     <div className="flex items-center justify-between gap-4">
                       <div>
                         <h3 className="text-lg font-semibold">Set Interval</h3>
-                        <p className="text-sm text-muted-foreground">Choose your check-in frequency.</p>
+                        <p className="text-sm text-muted-foreground">
+                          Choose your check-in frequency.
+                        </p>
                       </div>
                       <Clock className="h-6 w-6 text-muted-foreground" />
                     </div>
@@ -1445,9 +1636,13 @@ export default function DashboardPage() {
                   <section className="space-y-3">
                     <div>
                       <h3 className="text-lg font-semibold">Location Sharing</h3>
-                      <p className="text-sm text-muted-foreground">Share your location only when an alert is active.</p>
+                      <p className="text-sm text-muted-foreground">
+                        Share your location only when an alert is active.
+                      </p>
                     </div>
-                    <p className="text-sm text-muted-foreground">We only send your location when you press SOS or when an escalation begins.</p>
+                    <p className="text-sm text-muted-foreground">
+                      We only send your location when you press SOS or when an escalation begins.
+                    </p>
                     <div className="flex items-center justify-between text-lg">
                       <span className="font-semibold">Consent</span>
                       <span
@@ -1464,7 +1659,8 @@ export default function DashboardPage() {
                     </div>
                     {locationShareReason ? (
                       <p className="text-sm text-muted-foreground">
-                        Last shared for {locationShareReason === "sos" ? "an SOS alert" : "an escalation"}
+                        Last shared for{" "}
+                        {locationShareReason === "sos" ? "an SOS alert" : "an escalation"}
                         {locationSharedAt ? ` (${formatWhen(locationSharedAt)})` : ""}.
                       </p>
                     ) : (
@@ -1492,7 +1688,11 @@ export default function DashboardPage() {
                         {locationMutationPending ? "Enabling…" : "Enable location sharing"}
                       </Button>
                     )}
-                    {sharingLocation && <p className="text-xs text-muted-foreground">Sharing your current location…</p>}
+                    {sharingLocation && (
+                      <p className="text-xs text-muted-foreground">
+                        Sharing your current location…
+                      </p>
+                    )}
                   </section>
                 </CardContent>
               </Card>
@@ -1504,3 +1704,7 @@ export default function DashboardPage() {
     </>
   );
 }
+function collection(db: Firestore, arg1: string): import("@firebase/firestore").Query<unknown, import("@firebase/firestore").DocumentData> {
+  throw new Error("Function not implemented.");
+}
+

@@ -1,4 +1,3 @@
-// src/app/emergency-dashboard/page.tsx
 "use client";
 
 import Image from "next/image";
@@ -56,6 +55,8 @@ import {
   DialogTitle,
   DialogDescription,
 } from "@/components/ui/dialog";
+
+import { VoiceCheckIn } from "@/components/voice-check-in";
 
 // Push registration + roles
 import { registerDevice } from "@/lib/useFcmToken";
@@ -217,6 +218,19 @@ export default function EmergencyDashboardPage() {
   const [noLocationUser, setNoLocationUser] = useState<MainUserCard | null>(
     null,
   );
+
+  // voice message modal target (EC → MainUser)
+  const [voiceModalOpen, setVoiceModalOpen] = useState(false);
+  const [voiceTargetMainUser, setVoiceTargetMainUser] = useState<null | {
+    uid: string;
+    name: string;
+    phone?: string | null;
+  }>(null);
+
+  const handleVoiceToMainDone = () => {
+    setVoiceTargetMainUser(null);
+    setVoiceModalOpen(false);
+  };
 
   // audio playback state for recorded voice messages
   const audioRefs = useRef<Record<string, HTMLAudioElement | null>>({});
@@ -918,9 +932,20 @@ export default function EmergencyDashboardPage() {
                       Call
                     </Button>
                   )}
-                  <Button variant="outline">
+                  <Button
+                    variant="outline"
+                    onClick={() => {
+                      setVoiceTargetMainUser({
+                        uid: p.mainUserUid,
+                        name: p.name,
+                        phone: p.phone ?? undefined,
+                      });
+                      setVoiceModalOpen(true);
+                    }}
+                    aria-label={`Send a voice message to ${p.name}`}
+                  >
                     <MessageSquare className="mr-2 h-4 w-4" />
-                    Message
+                    Voice Message
                   </Button>
                   {p.status === "SOS" && (
                     <Button
@@ -937,6 +962,37 @@ export default function EmergencyDashboardPage() {
         </div>
       </main>
       <Footer />
+
+      {/* Voice Message modal (EC → Main User) */}
+      <Dialog
+        open={voiceModalOpen}
+        onOpenChange={(open) => {
+          setVoiceModalOpen(open);
+          if (!open) setVoiceTargetMainUser(null);
+        }}
+      >
+        <DialogContent className="sm:max-w-xl">
+          <DialogHeader>
+            <DialogTitle>Send a voice message</DialogTitle>
+            <DialogDescription>
+              {voiceTargetMainUser
+                ? `Record a quick update to ${voiceTargetMainUser.name}.`
+                : "Record a quick voice message."}
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="py-2">
+            <VoiceCheckIn
+              // IMPORTANT: Your VoiceCheckIn should use this to target the
+              // selected main user (EC → MainUser flow).
+              sendToUid={voiceTargetMainUser?.uid}
+              
+              onCheckIn={handleVoiceToMainDone}
+              onClearTarget={() => setVoiceTargetMainUser(null)}
+            />
+          </div>
+        </DialogContent>
+      </Dialog>
 
       {/* Centered popup when location is missing */}
       <Dialog

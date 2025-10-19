@@ -1,65 +1,100 @@
-// src/app/api/voice-message/send/route.ts
-// ① Ensure this route runs on the Node runtime (so we can use firebase-admin etc.)
+// ─────────────────────────────────────────────────────────────────────────────
+// /src/app/api/voice-message/send/route.ts
+// Direct voice message endpoint.
+// Supports TWO flows in one place:
+//
+//   A) MAIN USER  -> send to ONE emergency contact (targetContact: {email|phone})
+//   B) EMERGENCY CONTACT -> send to ONE main user (sendToUid: string)
+//
+// We intentionally DO NOT broadcast here. For broadcast, use
+// /api/voice-check-in/notify.
+// ─────────────────────────────────────────────────────────────────────────────
+
+// (1) Force Node runtime so firebase-admin works.
 export const runtime = "nodejs";
-// ② Always render dynamically (no static caching) so each request is processed fresh.
+
+// (2) Always dynamic — no static caching of API responses.
 export const dynamic = "force-dynamic";
 
-import { NextRequest, NextResponse } from "next/server";           // ③ Next.js request/response types
-import { FieldValue } from "firebase-admin/firestore";              // ④ Server-side Firestore helpers (timestamps, etc.)
-import { getMessaging } from "firebase-admin/messaging";            // ⑤ FCM multicast (optional push to ONE EC)
-import { adminAuth, db } from "@/lib/firebaseAdmin";                // ⑥ Admin SDK (server) — initialized in your lib
-import { isMainUserRole, normalizeRole } from "@/lib/roles";        // ⑦ Role helpers
+// (3) Next server types
+import { NextRequest, NextResponse } from "next/server";
 
-/* ───────────────────────────── Normalizers ───────────────────────────── */
+// (4) Firestore server helpers (timestamps etc.)
+import { FieldValue } from "firebase-admin/firestore";
 
-// ⑧ Normalize emails to lower-case and trim whitespace for consistent matching.
-function normalizeEmail(value: unknown): string {
-  return typeof value === "string" ? value.trim().toLowerCase() : "";
+// (5) FCM (optional push notifications)
+import { getMessaging } from "firebase-admin/messaging";
+
+// (6) Admin SDK (already initialized in your project lib)
+import { adminAuth, db } from "@/lib/firebaseAdmin";
+
+// (7) Role normalization helper
+import { normalizeRole } from "@/lib/roles";
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Normalizers
+// ─────────────────────────────────────────────────────────────────────────────
+
+// (8) Lowercase + trim email for consistent matching.
+function normalizeEmail(v: unknown): string {
+  return typeof v === "string" ? v.trim().toLowerCase() : "";
 }
 
-// ⑨ Normalize phones to a simple E.164-like string (keep + and digits only; collapse extra +).
-function normalizePhone(value: unknown): string {
-  if (typeof value !== "string") return "";
-  const trimmed = value.trim();
-  if (!trimmed) return "";
-  let n = trimmed.replace(/[^\d+]/g, "");      // keep only + and digits
-  if (n.startsWith("+")) return `+${n.slice(1).replace(/\+/g, "")}`; // ensure at most one leading '+'
-  n = n.replace(/\+/g, "");                    // no '+': remove all others
-  if (n.startsWith("00") && n.length > 2) return `+${n.slice(2)}`;   // convert "00" intl prefix to '+'
+// (9) Keep + and digits only; coerce "00" prefix to "+"; collapse extra "+".
+function normalizePhone(v: unknown): string {
+  if (typeof v !== "string") return "";
+  const t = v.trim();
+  if (!t) return "";
+  let n = t.replace(/[^\d+]/g, "");
+  if (n.startsWith("+")) return `+${n.slice(1).replace(/\+/g, "")}`;
+  n = n.replace(/\+/g, "");
+  if (n.startsWith("00") && n.length > 2) return `+${n.slice(2)}`;
   return n;
 }
 
-/* ───────────────────────────── AuthZ ───────────────────────────── */
+// ─────────────────────────────────────────────────────────────────────────────
+// Auth
+// ─────────────────────────────────────────────────────────────────────────────
 
-// ⑩ Verify the caller is an authenticated MAIN USER via the Firebase Session Cookie.
-//    - This prevents an EC (or anonymous client) from sending targeted messages as the main user.
-async function requireMainUser(req: NextRequest) {
-  const cookie = req.cookies.get("__session")?.value || "";     // ⑪ Read Firebase session cookie set by your auth flow
-  if (!cookie) throw new Error("UNAUTHENTICATED");               // ⑫ No cookie → reject
+// (10) Verify Firebase session cookie and return uid + normalized role + userData.
+//      We allow both "main_user" and "emergency_contact" to call this route,
+//      and branch behavior inside POST.
+async function requireUser(req: NextRequest): Promise<{
+  uid: string;
+  role: "main_user" | "emergency_contact" | "admin" | "unknown";
+  userData: any | null;
+}> {
+  const cookie = req.cookies.get("__session")?.value || "";
+  if (!cookie) throw new Error("UNAUTHENTICATED");
+
   const decoded = await adminAuth
-    .verifySessionCookie(cookie, true)                           // ⑬ Verify & refresh check
+    .verifySessionCookie(cookie, true)
     .catch(() => {
-      throw new Error("UNAUTHENTICATED");                        // ⑭ Invalid/expired cookie → reject
+      throw new Error("UNAUTHENTICATED");
     });
 
-  const snap = await db.doc(`users/${decoded.uid}`).get();       // ⑮ Load caller user doc
-  const role = normalizeRole((snap.data() as any)?.role);        // ⑯ Normalize role
-  if (!isMainUserRole(role || undefined))                        // ⑰ Only main user can call this route
-    throw new Error("NOT_AUTHORIZED");
-  return { uid: decoded.uid as string, userData: (snap.data() as any) || null };
+  const snap = await db.doc(`users/${decoded.uid}`).get();
+  const role = normalizeRole((snap.data() as any)?.role) || "unknown";
+  return {
+    uid: decoded.uid as string,
+    role: role as any,
+    userData: (snap.data() as any) || null,
+  };
 }
 
-/* ───────────────────────────── Utilities ───────────────────────────── */
+// ─────────────────────────────────────────────────────────────────────────────
+// Utilities
+// ─────────────────────────────────────────────────────────────────────────────
 
-// ⑱ Collect all FCM tokens for a given user (best-effort, deduped).
+// (11) Gather FCM tokens under users/{uid}/devices; dedupe; ignore disabled.
 async function getFcmTokensForUser(uid: string): Promise<string[]> {
   try {
     const snap = await db.collection(`users/${uid}/devices`).get();
     const tokens = new Set<string>();
-    snap.forEach((doc) => {
-      const d = doc.data() as any;
-      const t = String(d?.fcmToken || d?.token || "").trim();
-      if (!d?.disabled && t) tokens.add(t);
+    snap.forEach((d) => {
+      const x = d.data() as any;
+      const t = String(x?.fcmToken || x?.token || "").trim();
+      if (!x?.disabled && t) tokens.add(t);
     });
     return Array.from(tokens);
   } catch {
@@ -67,8 +102,13 @@ async function getFcmTokensForUser(uid: string): Promise<string[]> {
   }
 }
 
-// ⑲ Send a *single-recipient* push (we still use multicast API for simplicity).
-async function sendPushToOneEc(tokens: string[], title: string, body: string, data: Record<string,string>) {
+// (12) Send a single-recipient push (multicast API used for convenience).
+async function sendPushToOne(
+  tokens: string[],
+  title: string,
+  body: string,
+  data: Record<string, string>
+) {
   const uniq = Array.from(new Set(tokens.filter(Boolean)));
   if (!uniq.length) return { successCount: 0, failureCount: 0 };
   const messaging = getMessaging();
@@ -82,235 +122,270 @@ async function sendPushToOneEc(tokens: string[], title: string, body: string, da
   return { successCount: resp.successCount, failureCount: resp.failureCount };
 }
 
-/* ───────────────────────────── Handler ───────────────────────────── */
+// (13) Check that an EC is actively linked to a main user.
+async function verifyLink(mainUserUid: string, emergencyContactUid: string): Promise<boolean> {
+  const snap = await db
+    .collection(`users/${mainUserUid}/emergency_contact`)
+    .where("emergencyContactUid", "==", emergencyContactUid)
+    .where("status", "==", "ACTIVE")
+    .limit(1)
+    .get();
+  return !snap.empty;
+}
 
-// ⑳ Handle targeted voice message sends (to exactly ONE emergency contact).
+// ─────────────────────────────────────────────────────────────────────────────
+// Handler
+// ─────────────────────────────────────────────────────────────────────────────
+
 export async function POST(req: NextRequest) {
   try {
-    // ㉑ Authorization: must be a main user
-    const { uid: mainUserUid, userData } = await requireMainUser(req);
+    // (14) Who is calling? (main_user or emergency_contact)
+    const { uid: callerUid, role, userData } = await requireUser(req);
 
-    // ㉒ Parse payload from client
+    // (15) Parse payload
     const body = await req.json().catch(() => ({} as any));
 
-    // ㉓ Required: transcript (the user's message text)
+    // (16) Required transcript
     const transcript = String(body?.transcribedSpeech || "").trim();
 
-    // ㉔ Required: assessment (AI explanation + anomaly flag) from /api/voice-check-in step
+    // (17) Required AI assessment (from /api/voice-check-in)
     const assessment = body?.assessment as
       | { anomalyDetected: boolean; explanation: string }
       | undefined;
 
-    // ㉕ Optional: audio recording as a base64 data URL ("data:audio/…;base64,…")
-    const audioDataUrlRaw = typeof body?.audioDataUrl === "string" ? body.audioDataUrl.trim() : "";
+    // (18) Optional audio clip as data URL
+    const audioDataUrlRaw =
+      typeof body?.audioDataUrl === "string" ? body.audioDataUrl.trim() : "";
 
-    // ㉖ Required: target contact info { email?, phone? } – at least one must be provided
-    const targetRaw = (body?.targetContact ?? null) as null | { email?: unknown; phone?: unknown };
+    // (19) MAIN USER path: contact selector
+    const targetRaw = (body?.targetContact ?? null) as null | {
+      email?: unknown;
+      phone?: unknown;
+    };
     const targetEmail = normalizeEmail(targetRaw?.email);
     const targetPhone = normalizePhone(targetRaw?.phone);
 
-    // ㉗ Validate: transcript present
-    if (!transcript) {
-      return NextResponse.json({ error: "transcribedSpeech is required" }, { status: 400 });
-    }
-    // ㉘ Validate: assessment explanation present
-    if (!assessment?.explanation?.trim()) {
-      return NextResponse.json({ error: "assessment.explanation is required" }, { status: 400 });
-    }
-    // ㉙ Validate: target present (email or phone)
-    if (!targetEmail && !targetPhone) {
-      return NextResponse.json({ error: "targetContact (email or phone) is required" }, { status: 400 });
-    }
+    // (20) EMERGENCY CONTACT path: main user to send to
+    const sendToUid = typeof body?.sendToUid === "string" ? body.sendToUid.trim() : "";
 
-    // ㉚ Validate audio data URL format if provided
+    // (21) Validate transcript + assessment
+    if (!transcript)
+      return NextResponse.json({ error: "transcribedSpeech is required" }, { status: 400 });
+    if (!assessment?.explanation?.trim())
+      return NextResponse.json({ error: "assessment.explanation is required" }, { status: 400 });
+
+    // (22) Validate audio format if present
     let audioDataUrl: string | null = null;
     if (audioDataUrlRaw) {
       if (!/^data:audio\//i.test(audioDataUrlRaw)) {
         return NextResponse.json(
           { error: "audioDataUrl must be a base64-encoded data URL (data:audio/...)" },
-          { status: 400 },
+          { status: 400 }
         );
       }
       audioDataUrl = audioDataUrlRaw;
     }
 
-    // ㉛ Fetch TWO mirrors of EC links:
-    //     A) Top-level `/emergencyContacts` (often used by admin/push flows; some installs mark ACTIVE there)
-    //     B) Per-main-user subcollection `/users/{mainUserUid}/emergency_contact/*` (what EC dashboard usually reads)
-    const [topSnap, subSnap] = await Promise.all([
-      db
-        .collection("emergencyContacts")
-        .where("mainUserUid", "==", mainUserUid)
-        .get(), // ← no status filter here; we’ll filter by match next
-      db.collection(`users/${mainUserUid}/emergency_contact`).get(),
-    ]);
+    // ─────────────────────────────────────────────────────────────────────────
+    // A) MAIN USER  → send to ONE EC
+    // ─────────────────────────────────────────────────────────────────────────
+    if (role === "main_user") {
+      const mainUserUid = callerUid;
 
-    // ㉜ Find the *single* intended contact by email/phone across BOTH sets.
-    //     We match using normalized email/phone, and then dedupe by emergencyContactUid if available.
-    type LinkDoc = {
-      ref: FirebaseFirestore.DocumentReference<FirebaseFirestore.DocumentData>;
-      data: any;
-      scope: "top" | "sub";
-    };
-
-    // ㉝ Helper to normalize potential email/phone fields from a doc
-    const extractKeys = (d: any) => {
-      const emails = [
-        normalizeEmail(d?.email),
-        normalizeEmail(d?.emergencyContactEmail),
-        normalizeEmail(d?.contactEmail),
-      ].filter(Boolean);
-      const phones = [
-        normalizePhone(d?.phone),
-        normalizePhone(d?.contactPhone),
-      ].filter(Boolean);
-      const ecUid = typeof d?.emergencyContactUid === "string" ? d.emergencyContactUid.trim() : "";
-      return { emails, phones, ecUid };
-    };
-
-    const topMatches: LinkDoc[] = [];
-    topSnap.docs.forEach((docSnap) => {
-      const d = docSnap.data();
-      const { emails, phones } = extractKeys(d);
-      const emailOk = targetEmail ? emails.includes(targetEmail) : false;
-      const phoneOk = targetPhone ? phones.includes(targetPhone) : false;
-      if ((targetEmail && emailOk) || (targetPhone && phoneOk)) {
-        topMatches.push({ ref: docSnap.ref, data: d, scope: "top" });
-      }
-    });
-
-    const subMatches: LinkDoc[] = [];
-    subSnap.docs.forEach((docSnap) => {
-      const d = docSnap.data();
-      const { emails, phones } = extractKeys(d);
-      const emailOk = targetEmail ? emails.includes(targetEmail) : false;
-      const phoneOk = targetPhone ? phones.includes(targetPhone) : false;
-      if ((targetEmail && emailOk) || (targetPhone && phoneOk)) {
-        subMatches.push({ ref: docSnap.ref, data: d, scope: "sub" });
-      }
-    });
-
-    // ㉞ Combine & dedupe by emergencyContactUid (so we can update both mirror docs for the SAME EC).
-    const byEcUid = new Map<string, LinkDoc[]>();
-    const pushInto = (arr: LinkDoc[]) => {
-      arr.forEach((row) => {
-        const ecUid =
-          (typeof row.data?.emergencyContactUid === "string" && row.data.emergencyContactUid.trim()) ||
-          `__unknown__:${row.ref.path}`; // fallback key if uid missing (rare)
-        const list = byEcUid.get(ecUid) || [];
-        list.push(row);
-        byEcUid.set(ecUid, list);
-      });
-    };
-    pushInto(topMatches);
-    pushInto(subMatches);
-
-    // ㉟ We expect EXACTLY ONE emergencyContactUid group to match.
-    if (byEcUid.size === 0) {
-      return NextResponse.json(
-        { error: "Target emergency contact not found for this user" },
-        { status: 404 },
-      );
-    }
-    if (byEcUid.size > 1) {
-      // ㊱ Safety: two (or more) different EC UIDs matched the query → ambiguous; ask client to disambiguate.
-      return NextResponse.json(
-        {
-          error:
-            "Multiple contacts matched the provided email/phone. Please disambiguate (use a unique email or phone).",
-          matchedGroups: Array.from(byEcUid.keys()),
-        },
-        { status: 409 },
-      );
-    }
-
-    // ㊲ Extract the single winning group (and its mirror docs)
-    const [[targetEcUid, mirrorDocs]] = Array.from(byEcUid.entries());
-
-    // ㊳ Prepare the payload to write (DIRECT message — NOT a broadcast).
-    const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000); // 24h TTL for UI
-    const payload = {
-      transcript,
-      explanation: assessment.explanation.trim(),
-      anomalyDetected: Boolean(assessment.anomalyDetected),
-      createdAt: FieldValue.serverTimestamp(),
-      expiresAt,
-      audioDataUrl: audioDataUrl ?? null,
-
-      // ㊴ Direct-target metadata so dashboards can filter correctly.
-      audience: "direct" as const,
-      targetEmergencyContactUid: targetEcUid.startsWith("__unknown__") ? null : targetEcUid,
-      targetEmergencyContactEmail: targetEmail || null,
-      targetEmergencyContactPhone: targetPhone || null,
-    };
-
-    // ㊵ IMPORTANT: For a *direct* message we DO NOT overwrite the main user’s
-    //     `users/{mainUserUid}.latestVoiceMessage` (that would make *all* ECs see it).
-    //     Instead, we only write to the matched mirror docs (top + sub) for THIS EC.
-    const batch = db.batch();
-
-    // ㊶ Update *each* mirror doc for the same EC (both layers, if they exist)
-    for (const { ref } of mirrorDocs) {
-      batch.set(
-        ref,
-        { lastVoiceMessage: payload, updatedAt: FieldValue.serverTimestamp() },
-        { merge: true },
-      );
-    }
-
-    // ㊷ (Optional) If you still want to persist the user's "latest" history document,
-    //     you can write to a *separate* history collection (NOT the dashboard mirror).
-    //     Example (commented out):
-    // const historyRef = db
-    //   .collection("users").doc(mainUserUid)
-    //   .collection("voiceMessagesHistory").doc(); // auto-id
-    // batch.set(historyRef, { ...payload, mainUserUid });
-
-    await batch.commit();
-
-    // ㊸ OPTIONAL: Push only to the ONE targeted EC (best-effort; ignore failures).
-    //     If we know the EC uid, we can load their device tokens.
-    let pushResult: { successCount: number; failureCount: number } | null = null;
-    const ecUidForPush = targetEcUid.startsWith("__unknown__") ? "" : targetEcUid;
-    if (ecUidForPush) {
-      const tokens = await getFcmTokensForUser(ecUidForPush);
-      if (tokens.length) {
-        const mainUserName =
-          (userData?.firstName || userData?.lastName)
-            ? `${userData?.firstName || ""} ${userData?.lastName || ""}`.trim()
-            : "your contact";
-
-        pushResult = await sendPushToOneEc(
-          tokens,
-          "New voice message",
-          `${mainUserName} sent you a private voice update.`,
-          {
-            type: "voice_message_direct",
-            mainUserUid,
-            targetEmergencyContactUid: ecUidForPush,
-          }
+      // (23) Require some target
+      if (!targetEmail && !targetPhone) {
+        return NextResponse.json(
+          { error: "targetContact (email or phone) is required" },
+          { status: 400 }
         );
       }
+
+      // (24) Load both mirrors of EC links (top-level + subcollection)
+      const [topSnap, subSnap] = await Promise.all([
+        db.collection("emergencyContacts").where("mainUserUid", "==", mainUserUid).get(),
+        db.collection(`users/${mainUserUid}/emergency_contact`).get(),
+      ]);
+
+      // (25) Helper: pull all potential keys from a doc
+      type LinkDoc = {
+        ref: FirebaseFirestore.DocumentReference<FirebaseFirestore.DocumentData>;
+        data: any;
+        scope: "top" | "sub";
+      };
+      const extract = (d: any) => {
+        const emails = [
+          normalizeEmail(d?.email),
+          normalizeEmail(d?.emergencyContactEmail),
+          normalizeEmail(d?.contactEmail),
+        ].filter(Boolean);
+        const phones = [normalizePhone(d?.phone), normalizePhone(d?.contactPhone)].filter(Boolean);
+        const ecUid =
+          typeof d?.emergencyContactUid === "string" ? d.emergencyContactUid.trim() : "";
+        return { emails, phones, ecUid };
+      };
+
+      // (26) Find matches by email/phone across BOTH sets
+      const matches: LinkDoc[] = [];
+      topSnap.docs.forEach((docSnap) => {
+        const d = docSnap.data();
+        const { emails, phones } = extract(d);
+        const emailOk = targetEmail ? emails.includes(targetEmail) : false;
+        const phoneOk = targetPhone ? phones.includes(targetPhone) : false;
+        if ((targetEmail && emailOk) || (targetPhone && phoneOk)) {
+          matches.push({ ref: docSnap.ref, data: d, scope: "top" });
+        }
+      });
+      subSnap.docs.forEach((docSnap) => {
+        const d = docSnap.data();
+        const { emails, phones } = extract(d);
+        const emailOk = targetEmail ? emails.includes(targetEmail) : false;
+        const phoneOk = targetPhone ? phones.includes(targetPhone) : false;
+        if ((targetEmail && emailOk) || (targetPhone && phoneOk)) {
+          matches.push({ ref: docSnap.ref, data: d, scope: "sub" });
+        }
+      });
+
+      // (27) Group by emergencyContactUid so we only touch THAT contact’s mirror docs
+      const byEcUid = new Map<string, LinkDoc[]>();
+      for (const row of matches) {
+        const key =
+          (typeof row.data?.emergencyContactUid === "string" &&
+            row.data.emergencyContactUid.trim()) ||
+          `__unknown__:${row.ref.path}`;
+        const list = byEcUid.get(key) || [];
+        list.push(row);
+        byEcUid.set(key, list);
+      }
+
+      // (28) Ensure exactly one contact matched
+      if (byEcUid.size === 0) {
+        return NextResponse.json(
+          { error: "Target emergency contact not found for this user" },
+          { status: 404 }
+        );
+      }
+      if (byEcUid.size > 1) {
+        return NextResponse.json(
+          {
+            error:
+              "Multiple contacts matched the provided email/phone. Please disambiguate (use a unique email or phone).",
+          },
+          { status: 409 }
+        );
+      }
+
+      // (29) Single “winner” and its mirror docs
+      const [[targetEcUid, mirrorDocs]] = Array.from(byEcUid.entries());
+
+      // (30) Build the direct payload
+      const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000);
+      const payload = {
+        transcript,
+        explanation: assessment.explanation.trim(),
+        anomalyDetected: Boolean(assessment.anomalyDetected),
+        createdAt: FieldValue.serverTimestamp(),
+        expiresAt,
+        audioDataUrl: audioDataUrl ?? null,
+        audience: "direct" as const,
+        targetEmergencyContactUid: targetEcUid.startsWith("__unknown__") ? null : targetEcUid,
+        targetEmergencyContactEmail: targetEmail || null,
+        targetEmergencyContactPhone: targetPhone || null,
+      };
+
+      // (31) IMPORTANT: only write to the matched contact’s mirror docs.
+      //      Do NOT overwrite users/{mainUserUid}.latestVoiceMessage (that’s for broadcast).
+      const batch = db.batch();
+      for (const { ref } of mirrorDocs) {
+        batch.set(
+          ref,
+          { lastVoiceMessage: payload, updatedAt: FieldValue.serverTimestamp() },
+          { merge: true }
+        );
+      }
+      await batch.commit();
+
+      // (32) Optional push to JUST that EC
+      let pushResult: { successCount: number; failureCount: number } | null = null;
+      const ecUidForPush = targetEcUid.startsWith("__unknown__") ? "" : targetEcUid;
+      if (ecUidForPush) {
+        const tokens = await getFcmTokensForUser(ecUidForPush);
+        if (tokens.length) {
+          const mainUserName =
+            (userData?.firstName || userData?.lastName)
+              ? `${userData?.firstName || ""} ${userData?.lastName || ""}`.trim()
+              : "your contact";
+          pushResult = await sendPushToOne(
+            tokens,
+            "New voice message",
+            `${mainUserName} sent you a private voice update.`,
+            {
+              type: "voice_message_direct",
+              mainUserUid,
+              targetEmergencyContactUid: ecUidForPush,
+            }
+          );
+        }
+      }
+
+      return NextResponse.json({
+        ok: true,
+        updatedDocs: mirrorDocs.length,
+        mirrors: mirrorDocs.map((m) => ({ scope: m.scope, path: m.ref.path })),
+        pushed: Boolean(pushResult),
+        pushSuccess: pushResult?.successCount ?? 0,
+        pushFailure: pushResult?.failureCount ?? 0,
+      });
     }
 
-    // ㊹ Respond with details: counts & which doc paths were updated (useful for debugging).
-    return NextResponse.json({
-      ok: true,
-      updatedDocs: mirrorDocs.length,                           // number of mirror docs updated
-      mirrors: mirrorDocs.map((m) => ({ scope: m.scope, path: m.ref.path })), // which docs
-      pushed: Boolean(pushResult),
-      pushSuccess: pushResult?.successCount ?? 0,
-      pushFailure: pushResult?.failureCount ?? 0,
-    });
-  } catch (error: any) {
-    // ㊺ Map auth errors to 401/403; everything else is 500 with a generic message.
-    if (error?.message === "UNAUTHENTICATED") {
+    // ─────────────────────────────────────────────────────────────────────────
+    // B) EMERGENCY CONTACT  → send to ONE MAIN USER
+    // ─────────────────────────────────────────────────────────────────────────
+    if (role === "emergency_contact") {
+      // (33) Require the main user UID to send to
+      if (!sendToUid) {
+        return NextResponse.json(
+          { error: "sendToUid is required when an emergency contact sends a message" },
+          { status: 400 }
+        );
+      }
+
+      // (34) Ensure this EC is actively linked to that main user
+      const linked = await verifyLink(sendToUid, callerUid);
+      if (!linked) {
+        return NextResponse.json({ error: "Not authorized to message this user" }, { status: 403 });
+      }
+
+      // (35) Build payload intended for the MAIN USER dashboard
+      const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000);
+      const payloadForMain = {
+        transcript,
+        explanation: assessment.explanation.trim(),
+        anomalyDetected: Boolean(assessment.anomalyDetected),
+        createdAt: FieldValue.serverTimestamp(),
+        expiresAt,
+        audioDataUrl: audioDataUrl ?? null,
+        audience: "from_emergency_contact" as const,
+        fromEmergencyContactUid: callerUid,
+      };
+
+      // (36) Persist the full message to users/{sendToUid}/contactVoiceMessages/{AUTO_ID}
+      const newMessageRef = db.collection(`users/${sendToUid}/contactVoiceMessages`).doc();
+      await newMessageRef.set(payloadForMain);
+
+      // (37) Optionally: push to the main user here (omitted for now).
+
+      return NextResponse.json({ ok: true, messageId: newMessageRef.id, mainUserUid: sendToUid });
+    }
+
+
+    // (38) Any other role: not allowed
+    return NextResponse.json({ error: "Not authorized" }, { status: 403 });
+  } catch (err: any) {
+    // (39) Map UNAUTHENTICATED -> 401; else 500
+    if (err?.message === "UNAUTHENTICATED") {
       return NextResponse.json({ error: "Unauthenticated" }, { status: 401 });
     }
-    if (error?.message === "NOT_AUTHORIZED") {
-      return NextResponse.json({ error: "Not authorized" }, { status: 403 });
-    }
-    console.error("[voice-message/send] failed:", error);
-    return NextResponse.json({ error: error?.message || "Failed to send" }, { status: 500 });
+    console.error("[voice-message/send] failed:", err);
+    return NextResponse.json({ error: err?.message || "Failed to send" }, { status: 500 });
   }
 }
