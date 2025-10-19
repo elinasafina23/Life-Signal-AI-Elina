@@ -154,6 +154,10 @@ export async function POST(req: NextRequest) {
       createdAt: FieldValue.serverTimestamp(),
       expiresAt,
       audioDataUrl: audioDataUrl ?? null,
+      audience: "broadcast" as const,
+      targetEmergencyContactUid: null,
+      targetEmergencyContactEmail: null,
+      targetEmergencyContactPhone: null,
     };
 
     // 5) Write once to the main user + mirror onto every ACTIVE contact doc.

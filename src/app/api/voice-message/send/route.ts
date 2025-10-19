@@ -113,6 +113,18 @@ export async function POST(req: NextRequest) {
     }
 
     const contactDoc = candidates[0]; // exactly one
+    const contactData = contactDoc.data() as any;
+    const targetEmergencyContactUidRaw = contactData?.emergencyContactUid;
+    const targetEmergencyContactUid =
+      typeof targetEmergencyContactUidRaw === "string"
+        ? targetEmergencyContactUidRaw.trim()
+        : "";
+    const contactEmailFallback =
+      normalizeEmail(contactData?.email) ||
+      normalizeEmail(contactData?.emergencyContactEmail) ||
+      normalizeEmail(contactData?.contactEmail);
+    const contactPhoneFallback = normalizePhone(contactData?.phone);
+
     const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000);
     const userRef = db.doc(`users/${mainUserUid}`);
 
@@ -123,34 +135,54 @@ export async function POST(req: NextRequest) {
       createdAt: FieldValue.serverTimestamp(),
       expiresAt,
       audioDataUrl: audioDataUrl ?? null,
+      audience: "targeted" as const,
+      targetEmergencyContactUid: targetEmergencyContactUid || null,
+      targetEmergencyContactEmail: targetEmail || contactEmailFallback || null,
+      targetEmergencyContactPhone: targetPhone || contactPhoneFallback || null,
     };
 
     // Write:
     // 1) latest voice (for the main user's dashboard history)
     // 2) ONLY the matched contact's lastVoiceMessage (no fan-out!)
     const batch = db.batch();
+    let updatedDocs = 0;
     const latestRef = db
       .collection("users").doc(mainUserUid)
       .collection("voiceMessages").doc("latest");
 
     batch.set(latestRef, payload);
+    updatedDocs++;
     batch.set(
       userRef,
       { latestVoiceMessage: payload, updatedAt: FieldValue.serverTimestamp() },
       { merge: true },
     );
+    updatedDocs++;
     batch.set(
       contactDoc.ref,
       { lastVoiceMessage: payload, updatedAt: FieldValue.serverTimestamp() },
       { merge: true },
     );
+    updatedDocs++;
+
+    if (targetEmergencyContactUid) {
+      const linkDocRef = db.doc(
+        `users/${mainUserUid}/emergency_contact/${targetEmergencyContactUid}`,
+      );
+      batch.set(
+        linkDocRef,
+        { lastVoiceMessage: payload, updatedAt: FieldValue.serverTimestamp() },
+        { merge: true },
+      );
+      updatedDocs++;
+    }
 
     await batch.commit();
 
     // No broadcast push here. (If you later want *optional* push to that ONE EC, do it here.)
     return NextResponse.json({
       ok: true,
-      updatedDocs: 2, // contact + main-user mirror
+      updatedDocs,
       contactId: contactDoc.id,
     });
   } catch (error: any) {

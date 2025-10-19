@@ -84,6 +84,7 @@ export type MainUserCard = {
     anomalyDetected: boolean;
     createdAt: Date | null;
     audioUrl?: string | null;
+    audience?: "broadcast" | "targeted";
   } | null;
   // NEW: mood summary shown on the emergency dashboard
   moodSummary?: {
@@ -114,6 +115,10 @@ export type MainUserDoc = {
     createdAt?: Timestamp;
     audioDataUrl?: string;
     audioUrl?: string;
+    audience?: "broadcast" | "targeted";
+    targetEmergencyContactUid?: string | null;
+    targetEmergencyContactEmail?: string | null;
+    targetEmergencyContactPhone?: string | null;
   };
    // NEW: persisted mood summary written by /api/ask-ai
    latestMoodAssessment?: {
@@ -337,6 +342,7 @@ export default function EmergencyDashboardPage() {
         collectionGroup(db, "emergency_contact"),
         where("emergencyContactUid", "==", user.uid)
       );
+      const currentEmergencyContactUid = user.uid;
 
       function wireLinksListener(q: FsQuery<DocumentData>, key: string) {
         unsubsRef.current[key] = onSnapshot(q, (linksSnap: QuerySnapshot<DocumentData>) => {
@@ -424,6 +430,13 @@ export default function EmergencyDashboardPage() {
                 const sanitizedPhone = sanitizePhone((userData as any)?.phone);
 
                 const rawVoice = (userData as any)?.latestVoiceMessage;
+                const voiceAudience =
+                  rawVoice?.audience === "targeted" ? "targeted" : "broadcast";
+                const rawTargetUid =
+                  typeof rawVoice?.targetEmergencyContactUid === "string"
+                    ? rawVoice.targetEmergencyContactUid.trim()
+                    : "";
+
                 let latestVoiceMessage = rawVoice
                   ? {
                       transcript:
@@ -451,6 +464,18 @@ export default function EmergencyDashboardPage() {
                   !latestVoiceMessage.audioUrl
                 ) {
                   latestVoiceMessage = null;
+                }
+
+                if (voiceAudience === "targeted") {
+                  const matchesTarget =
+                    rawTargetUid && rawTargetUid === currentEmergencyContactUid;
+                  if (!matchesTarget) {
+                    latestVoiceMessage = null;
+                  } else if (latestVoiceMessage) {
+                    latestVoiceMessage.audience = "targeted";
+                  }
+                } else if (latestVoiceMessage) {
+                  latestVoiceMessage.audience = "broadcast";
                 }
 // ---- Mood summary (from /api/ask-ai) ----
 const rawMood = (userData as any)?.latestMoodAssessment;
