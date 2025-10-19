@@ -10,27 +10,6 @@ import { isMainUserRole, normalizeRole } from "@/lib/roles";
 
 /* ───────────────────────────── Helpers ───────────────────────────── */
 
-// Normalize/compare emails in lower-case.
-function normalizeEmailValue(v: unknown): string {
-  return typeof v === "string" ? v.trim().toLowerCase() : "";
-}
-
-// Normalize phones to a simple E.164-like string (keep + and digits).
-function normalizePhoneValue(v: unknown): string {
-  if (typeof v !== "string") return "";
-  const trimmed = v.trim();
-  if (!trimmed) return "";
-  let normalized = trimmed.replace(/[^\d+]/g, "");
-  if (normalized.startsWith("+")) {
-    return `+${normalized.slice(1).replace(/\+/g, "")}`;
-  }
-  normalized = normalized.replace(/\+/g, "");
-  if (normalized.startsWith("00") && normalized.length > 2) {
-    return `+${normalized.slice(2)}`;
-  }
-  return normalized;
-}
-
 // Verify the caller is the main user (via session cookie).
 async function requireMainUser(req: NextRequest) {
   const cookie = req.cookies.get("__session")?.value || "";
@@ -41,7 +20,7 @@ async function requireMainUser(req: NextRequest) {
   const userSnap = await db.doc(`users/${decoded.uid}`).get();
   const role = normalizeRole((userSnap.data() as any)?.role);
   if (!isMainUserRole(role || undefined)) throw new Error("NOT_AUTHORIZED");
-  return { uid: decoded.uid as string, userData: userSnap.data() as any | null };
+  return { uid: decoded.uid as string, userData: (userSnap.data() as any) || null };
 }
 
 // Get all FCM tokens for a user (deduped, best-effort).
@@ -79,26 +58,25 @@ async function sendPushToTokens(
   return { successCount: resp.successCount, failureCount: resp.failureCount };
 }
 
-// Merge ACTIVE contacts from:
-//   A) top-level  /emergencyContacts
-//   B) subcol     /users/{mainUserUid}/emergency_contact
-// Returns both sets so we can mirror writes to each document.
-async function fetchAllActiveContacts(mainUserUid: string) {
+/**
+ * Fetch contacts to mirror to:
+ *  - Top-level mirror (/emergencyContacts): keep `status == "ACTIVE"` (useful for push targeting or admin views)
+ *  - Per-link docs   (/users/{uid}/emergency_contact/*): **ALL** link docs (no status filter) so the EC dashboard
+ *    tiles always get updated regardless of link status.
+ */
+async function fetchAllContactsForMirroring(mainUserUid: string) {
   const [top, sub] = await Promise.all([
     db
       .collection("emergencyContacts")
       .where("mainUserUid", "==", mainUserUid)
       .where("status", "==", "ACTIVE")
       .get(),
-    db
-      .collection(`users/${mainUserUid}/emergency_contact`)
-      .where("status", "==", "ACTIVE")
-      .get(),
+    db.collection(`users/${mainUserUid}/emergency_contact`).get(), // ← no status filter on purpose
   ]);
 
   return {
-    topLevelDocs: top.docs, // docs in /emergencyContacts
-    subDocs: sub.docs,      // docs in /users/{uid}/emergency_contact
+    topLevelDocs: top.docs, // docs in /emergencyContacts (ACTIVE only)
+    subDocs: sub.docs, // docs in /users/{uid}/emergency_contact (ALL)
   };
 }
 
@@ -142,8 +120,10 @@ export async function POST(req: NextRequest) {
       audioDataUrl = audioDataUrlRaw;
     }
 
-    // 3) Load all ACTIVE contacts (top-level + subcollection).
-    const { topLevelDocs, subDocs } = await fetchAllActiveContacts(mainUserUid);
+    // 3) Load contacts:
+    //    - Top-level ACTIVE mirror
+    //    - ALL per-link docs (ensures both EC tiles update)
+    const { topLevelDocs, subDocs } = await fetchAllContactsForMirroring(mainUserUid);
     const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000);
 
     // 4) Build shared payload.
@@ -154,9 +134,15 @@ export async function POST(req: NextRequest) {
       createdAt: FieldValue.serverTimestamp(),
       expiresAt,
       audioDataUrl: audioDataUrl ?? null,
+      audience: "broadcast" as const,
+      targetEmergencyContactUid: null,
+      targetEmergencyContactEmail: null,
+      targetEmergencyContactPhone: null,
     };
 
-    // 5) Write once to the main user + mirror onto every ACTIVE contact doc.
+    // 5) Write once to the main user + mirror onto:
+    //    - every ACTIVE top-level doc
+    //    - **every** link doc (no status filter)
     const batch = db.batch();
 
     const voiceMessageRef = db
@@ -179,6 +165,7 @@ export async function POST(req: NextRequest) {
         { merge: true }
       );
     });
+
     subDocs.forEach((docSnap) => {
       batch.set(
         docSnap.ref,
@@ -201,6 +188,7 @@ export async function POST(req: NextRequest) {
     if (sharedVoicePayload.anomalyDetected) {
       pushSummary.attempted = true;
 
+      // Gather unique EC UIDs from both sets of docs
       const ecUids = new Set<string>();
       for (const d of [...topLevelDocs, ...subDocs]) {
         const data = d.data() as any;
@@ -243,7 +231,8 @@ export async function POST(req: NextRequest) {
     // 7) Done.
     return NextResponse.json({
       ok: true,
-      contactCount: topLevelDocs.length || subDocs.length,
+      // Report how many link docs were updated (what the EC dashboard reads)
+      contactCount: subDocs.length,
       anomalyPush: pushSummary,
     });
   } catch (error: any) {
