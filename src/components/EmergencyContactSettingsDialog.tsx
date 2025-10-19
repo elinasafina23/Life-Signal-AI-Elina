@@ -31,6 +31,7 @@ import {
   query,
   where,
   getDocs,
+  writeBatch,
 } from "firebase/firestore";
 import { Pencil, Check, X } from "lucide-react";
 
@@ -52,15 +53,19 @@ const isEmail = (v?: string) =>
   !!v && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v.trim());
 
 /** Telnyx-friendly E.164: +, country code 1–3 digits, then national digits (total 8–15). */
-const isE164 = (v?: string) =>
-  !!v && /^\+[1-9]\d{7,14}$/.test(v.trim());
+const isE164 = (v?: string) => !!v && /^\+[1-9]\d{7,14}$/.test(v.trim());
 
 /** Keep only one leading + and digits; drop spaces, dashes, parens, etc. */
 function sanitizePhoneInput(raw: string) {
-  const trimmed = raw.trim();
+  const trimmed = (raw || "").trim();
   let s = trimmed.replace(/[^\d+]/g, "");
-  s = s[0] === "+" ? ("+" + s.slice(1).replace(/\+/g, "")) : s.replace(/\+/g, "");
+  s = s[0] === "+" ? "+" + s.slice(1).replace(/\+/g, "") : s.replace(/\+/g, "");
   return s;
+}
+
+/** Normalize an email consistently for lookups */
+function normalizeEmail(s?: string | null) {
+  return typeof s === "string" ? s.trim().toLowerCase() : "";
 }
 
 export function EmergencyContactSettingsDialog({
@@ -130,10 +135,13 @@ export function EmergencyContactSettingsDialog({
         const snap = await getDoc(userRef);
         if (snap.exists()) {
           const d = snap.data() as any;
-          setFirstName(d.firstName ?? "");
-          setLastName(d.lastName ?? "");
-          setEmail(d.email ?? "");
-          setPhone(d.phone ?? "");
+
+          // sanitize & normalize on load
+          setFirstName((d.firstName ?? "").trim());
+          setLastName((d.lastName ?? "").trim());
+          setEmail(normalizeEmail(d.email));
+          setPhone(sanitizePhoneInput(d.phone ?? ""));
+
           setDefaultChannel(d.defaultChannel ?? "push");
 
           if (d.quietStart && d.quietEnd) {
@@ -183,7 +191,7 @@ export function EmergencyContactSettingsDialog({
             const uid: string =
               data.mainUserUid ||
               d.ref.parent.parent?.id ||
-              ""; // fallback to parent id
+              "";
             let name: string = data.mainUserName || "";
 
             if (!name && uid) {
@@ -238,6 +246,9 @@ export function EmergencyContactSettingsDialog({
 
   // -------------------- Validation --------------------
   const validateInputs = () => {
+    const phoneSan = sanitizePhoneInput(phone);
+    const emailNorm = normalizeEmail(email);
+
     if (!firstName.trim() || !lastName.trim()) {
       toast({
         title: "Missing name",
@@ -246,7 +257,7 @@ export function EmergencyContactSettingsDialog({
       });
       return false;
     }
-    if (email && !isEmail(email)) {
+    if (emailNorm && !isEmail(emailNorm)) {
       toast({
         title: "Invalid email",
         description: "Please enter a valid email address.",
@@ -255,7 +266,7 @@ export function EmergencyContactSettingsDialog({
       return false;
     }
     // Require E.164 phone (Telnyx compatible)
-    if (!phone.trim() || !isE164(phone)) {
+    if (!phoneSan || !isE164(phoneSan)) {
       toast({
         title: "Invalid phone",
         description: "Phone must include country code, e.g. +15551234567",
@@ -269,6 +280,13 @@ export function EmergencyContactSettingsDialog({
   // -------------------- Save EC profile --------------------
   const handleSave = async () => {
     if (!emergencyContactUid) return;
+
+    // sanitize before validation + save
+    const phoneSan = sanitizePhoneInput(phone);
+    const emailNorm = normalizeEmail(email);
+    setPhone(phoneSan);
+    setEmail(emailNorm);
+
     if (!validateInputs()) return;
 
     setSaving(true);
@@ -282,8 +300,8 @@ export function EmergencyContactSettingsDialog({
         lastName: lastName.trim(),
         name: fullName,
         displayName: fullName,
-        email: email.trim(),
-        phone: phone.trim(), // already sanitized & E.164-validated
+        email: emailNorm,
+        phone: phoneSan, // E.164
         defaultChannel,
         highPriorityOverride,
         escalationEnabled,
@@ -309,7 +327,8 @@ export function EmergencyContactSettingsDialog({
       const contactRef = doc(db, "users", emergencyContactUid);
       await setDoc(contactRef, data, { merge: true });
 
-      // 2) Fan-out to linked main users (server-side)
+      // 2) Server fan-out so every place is updated
+      let serverSynced = false;
       try {
         const res = await fetch("/api/emergency_contact/sync_profile", {
           method: "POST",
@@ -318,17 +337,87 @@ export function EmergencyContactSettingsDialog({
           body: JSON.stringify({
             emergencyContactUid,
             name: fullName,
-            email: email.trim(),
-            phone: phone.trim(), // E.164
+            email: emailNorm,
+            phone: phoneSan,
           }),
         });
         if (!res.ok) {
           const { error } = await res.json().catch(() => ({}));
           throw new Error(error || "Sync failed");
         }
+        serverSynced = true;
       } catch (e) {
-        // Non-fatal
-        console.error("Server sync failed:", e);
+        // Non-fatal: we also do a local best-effort fan-out below.
+        console.warn("Server sync route failed; applying local fan-out fallback.", e);
+      }
+
+      // 3) Local best-effort fan-out fallback (kept safe—no deletions)
+      if (!serverSynced) {
+        try {
+          const qLinks = query(
+            collectionGroup(db, "emergency_contact"),
+            where("emergencyContactUid", "==", emergencyContactUid)
+          );
+          const linkSnap = await getDocs(qLinks);
+
+          const batch = writeBatch(db);
+          const now = serverTimestamp();
+
+          // Update every link doc + embedded summary on the main user
+          for (const d of linkSnap.docs) {
+            const ref = d.ref; // users/{mainUserUid}/emergency_contact/{docId}
+            const parent = ref.parent.parent; // users/{mainUserUid}
+            const mainUserUid = parent?.id;
+
+            batch.set(
+              ref,
+              {
+                name: fullName,
+                email: emailNorm || null,
+                phone: phoneSan || null,
+                updatedAt: now,
+              },
+              { merge: true }
+            );
+
+            // Update the embedded summary on main user if it points to this EC by email
+            if (mainUserUid) {
+              const muRef = doc(db, "users", mainUserUid);
+              const muSnap = await getDoc(muRef);
+              const mu = muSnap.data() as any;
+
+              if (mu?.emergencyContacts) {
+                const ec = mu.emergencyContacts;
+                const updates: Record<string, any> = { updatedAt: now };
+
+                const c1Email = normalizeEmail(ec.contact1_email);
+                const c2Email = normalizeEmail(ec.contact2_email);
+
+                if (emailNorm && emailNorm === c1Email) {
+                  updates["emergencyContacts.contact1_firstName"] = firstName.trim();
+                  updates["emergencyContacts.contact1_lastName"] = lastName.trim();
+                  updates["emergencyContacts.contact1_email"] = emailNorm || null;
+                  updates["emergencyContacts.contact1_phone"] = phoneSan || null;
+                }
+                if (emailNorm && emailNorm === c2Email) {
+                  updates["emergencyContacts.contact2_firstName"] = firstName.trim();
+                  updates["emergencyContacts.contact2_lastName"] = lastName.trim();
+                  updates["emergencyContacts.contact2_email"] = emailNorm || null;
+                  updates["emergencyContacts.contact2_phone"] = phoneSan || null;
+                }
+
+                // Only write if something changed for either slot
+                if (Object.keys(updates).length > 1) {
+                  batch.set(muRef, updates, { merge: true });
+                }
+              }
+            }
+          }
+
+          await batch.commit();
+        } catch (fanErr) {
+          console.warn("Local fan-out fallback failed:", fanErr);
+        }
       }
 
       toast({ title: "Saved", description: "Settings updated and synced." });
@@ -455,7 +544,10 @@ export function EmergencyContactSettingsDialog({
 
   const handleConfirmEdit = (key: EditableFieldKey) => {
     const draftValue = fieldDrafts[key];
-    applyCommittedValue(key, draftValue ?? getCommittedValue(key));
+    // Phone gets sanitized on confirm to avoid invalid chars lingering in state
+    const nextVal =
+      key === "phone" ? sanitizePhoneInput(draftValue ?? getCommittedValue(key)) : (draftValue ?? getCommittedValue(key));
+    applyCommittedValue(key, nextVal);
     closeEditor(key);
   };
 

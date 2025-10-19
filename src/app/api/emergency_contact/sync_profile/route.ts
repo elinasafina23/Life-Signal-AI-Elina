@@ -2,6 +2,7 @@
 export const runtime = "nodejs";
 
 import { NextRequest, NextResponse } from "next/server";
+import { FieldValue } from "firebase-admin/firestore";
 import { adminAuth, db } from "@/lib/firebaseAdmin";
 
 /** Minimal E.164 (international) validator for Telnyx. */
@@ -14,6 +15,20 @@ function isEmail(v?: string): v is string {
   return typeof v === "string" && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v.trim());
 }
 
+/** Normalize email for comparisons. */
+function normalizeEmail(v?: string | null) {
+  return typeof v === "string" ? v.trim().toLowerCase() : "";
+}
+
+/** Keep + and digits only, collapse duplicate +, trim spaces. */
+function sanitizePhone(raw?: string | null) {
+  if (typeof raw !== "string") return "";
+  const trimmed = raw.trim();
+  let s = trimmed.replace(/[^\d+]/g, "");
+  s = s.startsWith("+") ? "+" + s.slice(1).replace(/\+/g, "") : s.replace(/\+/g, "");
+  return s;
+}
+
 /**
  * POST /api/emergency_contact/sync_profile
  * Body: { emergencyContactUid, name?, email?, phone? }
@@ -22,9 +37,7 @@ function isEmail(v?: string): v is string {
  * What it updates:
  *  - Any subcollection doc in collectionGroup("emergency_contact") where emergencyContactUid matches
  *  - Any top-level doc in collection("emergencyContacts") where emergencyContactUid matches
- * Validations:
- *  - phone must be E.164 (e.g., +15551234567) if provided
- *  - email must be valid if provided
+ *  - (NEW) Embedded summary fields on each affected main user document (contact1_* and contact2_*) if emails match
  */
 export async function POST(req: NextRequest) {
   try {
@@ -56,8 +69,11 @@ export async function POST(req: NextRequest) {
     // Prepare validated updates
     const updates: Record<string, unknown> = {};
     const name = (body.name || "").trim();
-    const email = (body.email || "").trim();
-    const phone = (body.phone || "").trim();
+    const emailRaw = (body.email || "").trim();
+    const phoneRaw = (body.phone || "").trim();
+
+    const email = normalizeEmail(emailRaw);
+    const phone = sanitizePhone(phoneRaw);
 
     if (name) updates.name = name;
     if (email) {
@@ -77,7 +93,7 @@ export async function POST(req: NextRequest) {
     }
 
     if (Object.keys(updates).length === 0) {
-      return NextResponse.json({ ok: true, updatedLinks: 0, updatedTopLevel: 0 });
+      return NextResponse.json({ ok: true, updatedLinks: 0, updatedTopLevel: 0, embeddedUpdated: 0 });
     }
 
     // ---- Query both locations that may store the contact ----
@@ -88,29 +104,39 @@ export async function POST(req: NextRequest) {
       .where("emergencyContactUid", "==", emergencyContactUid)
       .get();
 
-    // B) Top-level collection "emergencyContacts" (your screenshot)
+    // B) Top-level collection "emergencyContacts"
     const topSnap = await db
       .collection("emergencyContacts")
       .where("emergencyContactUid", "==", emergencyContactUid)
       .get();
 
     if (linkSnap.empty && topSnap.empty) {
-      return NextResponse.json({ ok: true, updatedLinks: 0, updatedTopLevel: 0 });
+      return NextResponse.json({ ok: true, updatedLinks: 0, updatedTopLevel: 0, embeddedUpdated: 0 });
     }
 
     const batch = db.batch();
     let updatedLinks = 0;
     let updatedTopLevel = 0;
 
-    // ---- Update link docs + send notifications to main user(s) ----
+    // Track main users to refresh embedded summaries, plus the "old" email per link
+    const mainUsersToTouch: Array<{ mainUserUid: string; oldEmail: string }> = [];
+
+    // ---- Update link docs + queue notifications to main user(s) ----
     linkSnap.forEach((docSnap) => {
       const linkRef = docSnap.ref;
+      const linkData = docSnap.data() as any;
+      const oldEmail = normalizeEmail(
+        linkData?.email ||
+          linkData?.emergencyContactEmail ||
+          linkData?.contactEmail ||
+          ""
+      );
 
       batch.set(
         linkRef,
         {
           ...updates,
-          updatedAt: new Date(),
+          updatedAt: FieldValue.serverTimestamp(),
         },
         { merge: true }
       );
@@ -118,6 +144,8 @@ export async function POST(req: NextRequest) {
 
       const mainUserId = linkRef.parent.parent?.id;
       if (mainUserId) {
+        mainUsersToTouch.push({ mainUserUid: mainUserId, oldEmail });
+
         const notifRef = db
           .collection("users")
           .doc(mainUserId)
@@ -137,7 +165,7 @@ export async function POST(req: NextRequest) {
             ...(email ? { email } : {}),
             ...(phone ? { phone } : {}),
           },
-          createdAt: new Date(),
+          createdAt: FieldValue.serverTimestamp(),
           read: false,
         });
       }
@@ -150,7 +178,7 @@ export async function POST(req: NextRequest) {
         topRef,
         {
           ...updates,
-          updatedAt: new Date(),
+          updatedAt: FieldValue.serverTimestamp(),
         },
         { merge: true }
       );
@@ -159,7 +187,71 @@ export async function POST(req: NextRequest) {
 
     await batch.commit();
 
-    return NextResponse.json({ ok: true, updatedLinks, updatedTopLevel });
+    // ---- (NEW) Update embedded summary on each affected main user ----
+    // We do this in a second pass because we need to read each main user's user doc.
+    // Match by email, accepting either the "old" email from the link or the new email being saved.
+    let embeddedUpdated = 0;
+
+    // Deduplicate main users while preserving earliest oldEmail we saw
+    const byMainUser = new Map<string, string>();
+    for (const entry of mainUsersToTouch) {
+      if (!byMainUser.has(entry.mainUserUid)) {
+        byMainUser.set(entry.mainUserUid, entry.oldEmail);
+      }
+    }
+
+    const batch2 = db.batch();
+
+    for (const [mainUserUid, oldEmail] of byMainUser.entries()) {
+      const muRef = db.doc(`users/${mainUserUid}`);
+      const muSnap = await muRef.get();
+      if (!muSnap.exists) continue;
+
+      const mu = muSnap.data() as any;
+      const ec = mu?.emergencyContacts || {};
+      const c1Email = normalizeEmail(ec.contact1_email);
+      const c2Email = normalizeEmail(ec.contact2_email);
+
+      const matchesOldOrNew = (slotEmail: string) =>
+        !!slotEmail && (slotEmail === oldEmail || slotEmail === email);
+
+      const updatesEmbedded: Record<string, unknown> = {};
+      let changed = false;
+
+      if (matchesOldOrNew(c1Email)) {
+        if (name) {
+          const [first, ...rest] = name.split(" ");
+          updatesEmbedded["emergencyContacts.contact1_firstName"] = first || "";
+          updatesEmbedded["emergencyContacts.contact1_lastName"] = rest.join(" ") || "";
+        }
+        if (email) updatesEmbedded["emergencyContacts.contact1_email"] = email || null;
+        if (phone) updatesEmbedded["emergencyContacts.contact1_phone"] = phone || null;
+        changed = true;
+      }
+
+      if (matchesOldOrNew(c2Email)) {
+        if (name) {
+          const [first, ...rest] = name.split(" ");
+          updatesEmbedded["emergencyContacts.contact2_firstName"] = first || "";
+          updatesEmbedded["emergencyContacts.contact2_lastName"] = rest.join(" ") || "";
+        }
+        if (email) updatesEmbedded["emergencyContacts.contact2_email"] = email || null;
+        if (phone) updatesEmbedded["emergencyContacts.contact2_phone"] = phone || null;
+        changed = true;
+      }
+
+      if (changed) {
+        updatesEmbedded["updatedAt"] = FieldValue.serverTimestamp();
+        batch2.set(muRef, updatesEmbedded, { merge: true });
+        embeddedUpdated++;
+      }
+    }
+
+    if (embeddedUpdated > 0) {
+      await batch2.commit();
+    }
+
+    return NextResponse.json({ ok: true, updatedLinks, updatedTopLevel, embeddedUpdated });
   } catch (e: any) {
     console.error("sync_profile error", e);
     const message = e?.message || "Sync failed";

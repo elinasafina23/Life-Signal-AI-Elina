@@ -9,7 +9,8 @@ import { useToast } from "@/hooks/use-toast";
 
 interface NotifyContactsResponse {
   ok: boolean;
-  contactCount?: number;
+  contactCount?: number; // broadcast response
+  updatedDocs?: number;  // targeted response
   anomalyPush?: {
     attempted: boolean;
     contactUidCount?: number;
@@ -24,23 +25,48 @@ interface VoiceContactTargetPayload {
   phone?: string | null;
 }
 
+/**
+ * Send the voice payload either:
+ * - to ALL emergency contacts (broadcast) via /api/voice-check-in/notify
+ * - to ONE selected contact (targeted) via /api/voice-message/send
+ *
+ * We switch endpoints based on whether a targetContact with (email|phone) is supplied.
+ */
 async function notifyEmergencyContacts(
   currentTranscript: string,
   aiAssessment: AssessVoiceCheckInOutput,
   audioDataUrl?: string | null,
   targetContact?: VoiceContactTargetPayload | null,
 ): Promise<NotifyContactsResponse> {
-  const response = await fetch("/api/voice-check-in/notify", {
+  // Decide the endpoint: targeted vs broadcast
+  const isTargeted =
+    !!targetContact &&
+    (!!(targetContact.email && targetContact.email.trim()) ||
+      !!(targetContact.phone && targetContact.phone.trim()));
+
+  const endpoint = isTargeted
+    ? "/api/voice-message/send"      // send to ONE selected EC
+    : "/api/voice-check-in/notify";  // broadcast to ALL ACTIVE ECs
+
+  // Build request body; include target only for targeted route
+  const body: any = {
+    transcribedSpeech: currentTranscript,
+    assessment: aiAssessment,
+    audioDataUrl,
+  };
+  if (isTargeted) {
+    body.targetContact = {
+      email: targetContact?.email ?? null,
+      phone: targetContact?.phone ?? null,
+    };
+  }
+
+  const response = await fetch(endpoint, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
     },
-    body: JSON.stringify({
-      transcribedSpeech: currentTranscript,
-      assessment: aiAssessment,
-      audioDataUrl,
-      targetContact,
-    }),
+    body: JSON.stringify(body),
   });
 
   const data = await response.json().catch(() => ({}));
@@ -321,6 +347,7 @@ export function VoiceCheckIn({ onCheckIn, targetContact, onClearTarget }: VoiceC
 
         const audioClip = await audioClipPromise;
 
+        // 🔁 NEW: route selection (targeted vs broadcast)
         try {
           const notifyResult = await notifyEmergencyContacts(
             currentTranscript,
@@ -333,12 +360,14 @@ export function VoiceCheckIn({ onCheckIn, targetContact, onClearTarget }: VoiceC
                 }
               : null,
           );
-          const notifiedCount = notifyResult?.contactCount ?? 0;
-          const pushInfo = notifyResult?.anomalyPush;
 
+          // Friendly toast copy for both cases
+          const targeted = !!targetContact?.name;
+          const notifiedCount = notifyResult?.contactCount ?? 0;
           let description: string;
-          if (targetContact?.name && notifiedCount > 0) {
-            description = `Shared directly with ${targetContact.name}.`;
+
+          if (targeted) {
+            description = `Shared directly with ${targetContact!.name}.`;
           } else if (notifiedCount > 0) {
             description = `Shared with ${
               notifiedCount === 1 ? "1 emergency contact" : `${notifiedCount} emergency contacts`
@@ -347,6 +376,7 @@ export function VoiceCheckIn({ onCheckIn, targetContact, onClearTarget }: VoiceC
             description = "Saved to your emergency dashboard for quick review.";
           }
 
+          const pushInfo = notifyResult?.anomalyPush;
           if (result.anomalyDetected && pushInfo?.attempted) {
             const success = pushInfo.successCount ?? 0;
             const tokens = pushInfo.tokenCount ?? 0;
@@ -359,10 +389,7 @@ export function VoiceCheckIn({ onCheckIn, targetContact, onClearTarget }: VoiceC
             }
           }
 
-          toast({
-            title: "Voice message sent",
-            description,
-          });
+          toast({ title: "Voice message sent", description });
         } catch (notifyError: any) {
           console.error("Failed to notify emergency contacts:", notifyError);
           toast({

@@ -1,3 +1,4 @@
+//functions/src/index.ts
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
 import { initializeApp } from "firebase-admin/app";
