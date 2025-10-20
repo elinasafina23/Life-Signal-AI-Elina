@@ -25,8 +25,6 @@ import {
   deleteField,
   Firestore,
 } from "firebase/firestore";
-// --- Firestore (query helpers used for latest contact voice message in dialog) ---
-import { collection, getDocs, limit, orderBy, query as fsQuery } from "firebase/firestore";
 
 import { onAuthStateChanged } from "firebase/auth";
 import { useRouter } from "next/navigation";
@@ -1176,54 +1174,62 @@ export default function DashboardPage() {
       setContactDialog({ open: true, kind, name, phone, email, uid: normalizedUid || null });
 
       // Optional: best-effort fetch of the latest voice message from this contact to the main user.
-      if (!mainUserUid || !normalizedUid) {
-        setLatestVoiceFromContact(null);
+      setIsPlayingLatest(false);
+      setLatestVoiceFromContact(null);
+
+      if (!normalizedUid) {
         return;
       }
       try {
-        const q = fsQuery(
-          collection(db, `users/${mainUserUid}/contactVoiceMessages`),
-          orderBy("createdAt", "desc"),
-          limit(20),
-        );
-        const snap = await getDocs(q);
-        if (snap.empty) {
-          setLatestVoiceFromContact(null);
-        } else {
-          const match = snap.docs
-            .map((doc) => doc.data() as any)
-            .find((docData) => {
-              const fromUid =
-                typeof docData?.fromEmergencyContactUid === "string"
-                  ? docData.fromEmergencyContactUid.trim()
-                  : "";
-              return fromUid && fromUid === normalizedUid;
-            });
+        const params = new URLSearchParams({ contactUid: normalizedUid });
+        const response = await fetch(`/api/voice-message/latest-for-contact?${params.toString()}`, {
+          method: "GET",
+          credentials: "include",
+        });
 
-          if (!match) {
-            setLatestVoiceFromContact(null);
-            return;
-          }
-
-          setLatestVoiceFromContact({
-            audioUrl:
-              typeof match?.audioUrl === "string" && match.audioUrl.trim()
-                ? match.audioUrl
-                : typeof match?.audioDataUrl === "string"
-                ? match.audioDataUrl
-                : "",
-            createdAt: match?.createdAt?.toDate ? match.createdAt.toDate() : null,
-            transcript: typeof match?.transcript === "string" ? match.transcript : undefined,
-          });
+        if (!response.ok) {
+          throw new Error(`Request failed with status ${response.status}`);
         }
+
+        const payload = (await response.json()) as {
+          latest?: {
+            audioUrl?: string | null;
+            audioDataUrl?: string | null;
+            createdAt?: string | null;
+            transcript?: string | null;
+          } | null;
+        };
+
+        const latest = payload?.latest;
+        if (!latest) {
+          setLatestVoiceFromContact(null);
+          return;
+        }
+
+        const createdAtString =
+          typeof latest?.createdAt === "string" ? latest.createdAt.trim() : "";
+        const createdAtDate = createdAtString ? new Date(createdAtString) : null;
+
+        setLatestVoiceFromContact({
+          audioUrl:
+            typeof latest?.audioUrl === "string" && latest.audioUrl.trim()
+              ? latest.audioUrl.trim()
+              : typeof latest?.audioDataUrl === "string" && latest.audioDataUrl.trim()
+              ? latest.audioDataUrl.trim()
+              : "",
+          createdAt:
+            createdAtDate && !Number.isNaN(createdAtDate.getTime()) ? createdAtDate : null,
+          transcript:
+            typeof latest?.transcript === "string" && latest.transcript.trim()
+              ? latest.transcript
+              : undefined,
+        });
       } catch (e) {
         console.warn("Latest voice fetch failed:", e);
         setLatestVoiceFromContact(null);
       }
     },
     [
-      db,
-      mainUserUid,
       primaryEmergencyContactEmail,
       primaryEmergencyContactName,
       primaryEmergencyContactPhone,
