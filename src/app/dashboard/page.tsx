@@ -26,15 +26,7 @@ import {
   Firestore,
 } from "firebase/firestore";
 // --- Firestore (query helpers used for latest contact voice message in dialog) ---
-import {
-  collection,
-  collectionGroup,
-  getDocs,
-  limit,
-  orderBy,
-  query as fsQuery,
-  where,
-} from "firebase/firestore";
+import { collection, getDocs, limit, orderBy, query as fsQuery } from "firebase/firestore";
 
 import { onAuthStateChanged } from "firebase/auth";
 import { useRouter } from "next/navigation";
@@ -171,6 +163,10 @@ const LOCATION_SHARE_COOLDOWN_MS = 60_000; // Throttle repeated shares
 const GEO_PERMISSION_DENIED = 1;
 const GEO_POSITION_UNAVAILABLE = 2;
 const GEO_TIMEOUT = 3;
+
+// ---- Normalizers ----
+const normalizeEmail = (value?: string | null) =>
+  typeof value === "string" ? value.trim().toLowerCase() : "";
 
 // ---- Styling tokens ----
 const PRIMARY_CARD_BASE_CLASSES =
@@ -437,7 +433,8 @@ export default function DashboardPage() {
           setPrimaryEmergencyContactPhone(
             contacts.contact1_phone ? sanitizePhone(contacts.contact1_phone) || null : null,
           );
-          setPrimaryEmergencyContactEmail(contacts.contact1_email?.trim() || null);
+          const primaryEmail = normalizeEmail(contacts.contact1_email);
+          setPrimaryEmergencyContactEmail(primaryEmail || null);
 
           const first2 = (contacts.contact2_firstName || "").trim();
           const last2 = (contacts.contact2_lastName || "").trim();
@@ -447,7 +444,8 @@ export default function DashboardPage() {
           setSecondaryEmergencyContactPhone(
             contacts.contact2_phone ? sanitizePhone(contacts.contact2_phone) || null : null,
           );
-          setSecondaryEmergencyContactEmail(contacts.contact2_email?.trim() || null);
+          const secondaryEmail = normalizeEmail(contacts.contact2_email);
+          setSecondaryEmergencyContactEmail(secondaryEmail || null);
         } else {
           // Reset when empty
           setEmergencyServiceCountry(DEFAULT_EMERGENCY_SERVICE_COUNTRY);
@@ -1069,38 +1067,46 @@ export default function DashboardPage() {
       const name = isPrimary ? primaryEmergencyContactName : secondaryEmergencyContactName;
       const phone = isPrimary ? primaryEmergencyContactPhone : secondaryEmergencyContactPhone;
       const email = isPrimary ? primaryEmergencyContactEmail : secondaryEmergencyContactEmail;
+      const normalizedEmail = normalizeEmail(email);
 
       setContactDialog({ open: true, kind, name, phone, email });
 
       // Optional: best-effort fetch of the latest voice message from this contact to the main user.
-      if (!mainUserUid || !email) {
+      if (!mainUserUid || !normalizedEmail) {
         setLatestVoiceFromContact(null);
         return;
       }
       try {
-        // Use a composite query if both are available, otherwise query by the available field.
-        // Note: Firestore queries with OR conditions require an index.
-        // Note: The "fromEmergencyContactUid" field will be added later when EC accounts are implemented.
         const q = fsQuery(
           collection(db, `users/${mainUserUid}/contactVoiceMessages`),
-          where("fromEmail", "==", email), // EC UID will be added here later
           orderBy("createdAt", "desc"),
-          limit(1),
+          limit(20),
         );
         const snap = await getDocs(q);
         if (snap.empty) {
           setLatestVoiceFromContact(null);
         } else {
-          const d = snap.docs[0].data() as any;
+          const match = snap.docs
+            .map((doc) => doc.data() as any)
+            .find((docData) => {
+              const fromEmail = normalizeEmail(docData?.fromEmail);
+              return fromEmail && fromEmail === normalizedEmail;
+            });
+
+          if (!match) {
+            setLatestVoiceFromContact(null);
+            return;
+          }
+
           setLatestVoiceFromContact({
             audioUrl:
-              typeof d?.audioUrl === "string" && d.audioUrl.trim()
-                ? d.audioUrl
-                : typeof d?.audioDataUrl === "string"
-                ? d.audioDataUrl
+              typeof match?.audioUrl === "string" && match.audioUrl.trim()
+                ? match.audioUrl
+                : typeof match?.audioDataUrl === "string"
+                ? match.audioDataUrl
                 : "",
-            createdAt: d?.createdAt?.toDate ? d.createdAt.toDate() : null,
-            transcript: typeof d?.transcript === "string" ? d.transcript : undefined,
+            createdAt: match?.createdAt?.toDate ? match.createdAt.toDate() : null,
+            transcript: typeof match?.transcript === "string" ? match.transcript : undefined,
           });
         }
       } catch (e) {
