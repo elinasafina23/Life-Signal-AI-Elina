@@ -1182,7 +1182,7 @@ export default function DashboardPage() {
       }
       try {
         const params = new URLSearchParams({ contactUid: normalizedUid });
-        const response = await fetch(`/api/voice-message/latest-for-contact?${params.toString()}`, {
+        const response = await fetch(`/api/voice-message/send?${params.toString()}`, {
           method: "GET",
           credentials: "include",
         });
