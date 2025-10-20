@@ -27,6 +27,7 @@ import {
 } from "firebase/firestore";
 // --- Firestore (query helpers used for latest contact voice message in dialog) ---
 import {
+  collection,
   collectionGroup,
   getDocs,
   limit,
@@ -1704,7 +1705,3 @@ export default function DashboardPage() {
     </>
   );
 }
-function collection(db: Firestore, arg1: string): import("@firebase/firestore").Query<unknown, import("@firebase/firestore").DocumentData> {
-  throw new Error("Function not implemented.");
-}
-
