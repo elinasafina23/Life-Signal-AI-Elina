@@ -285,7 +285,7 @@ export async function POST(req: NextRequest) {
         anomalyDetected: Boolean(assessment.anomalyDetected),
         createdAt: FieldValue.serverTimestamp(),
         expiresAt,
-        audioDataUrl: audioDataUrl ?? null,
+        audioUrl: audioDataUrl ?? null,
         audience: "direct" as const,
         targetEmergencyContactUid: targetEcUid.startsWith("__unknown__") ? null : targetEcUid,
         targetEmergencyContactEmail: targetEmail || null,
@@ -363,9 +363,11 @@ export async function POST(req: NextRequest) {
         anomalyDetected: Boolean(assessment.anomalyDetected),
         createdAt: FieldValue.serverTimestamp(),
         expiresAt,
-        audioDataUrl: audioDataUrl ?? null,
+        audioUrl: audioDataUrl ?? null,
         audience: "from_emergency_contact" as const,
         fromEmergencyContactUid: callerUid,
+        fromEmail: userData?.email ? normalizeEmail(userData.email) : null,
+        isRead: false,
       };
 
       // (36) Persist the full message to users/{sendToUid}/contactVoiceMessages/{AUTO_ID}
