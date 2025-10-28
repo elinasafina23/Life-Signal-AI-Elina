@@ -52,6 +52,10 @@ function normalizePhone(v: unknown): string {
   return n;
 }
 
+function normalizeUid(v: unknown): string {
+  return typeof v === "string" ? v.trim() : "";
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Auth
 // ─────────────────────────────────────────────────────────────────────────────
@@ -389,5 +393,64 @@ export async function POST(req: NextRequest) {
     }
     console.error("[voice-message/send] failed:", err);
     return NextResponse.json({ error: err?.message || "Failed to send" }, { status: 500 });
+  }
+}
+
+export async function GET(req: NextRequest) {
+  try {
+    const contactUid = normalizeUid(req.nextUrl.searchParams.get("contactUid"));
+    if (!contactUid) {
+      return NextResponse.json(
+        { error: "contactUid is required" },
+        { status: 400 },
+      );
+    }
+
+    const { uid: callerUid, role } = await requireUser(req);
+    if (role !== "main_user" && role !== "admin") {
+      return NextResponse.json({ error: "Not authorized" }, { status: 403 });
+    }
+
+    const snapshot = await db
+      .collection(`users/${callerUid}/contactVoiceMessages`)
+      .where("fromEmergencyContactUid", "==", contactUid)
+      .orderBy("createdAt", "desc")
+      .limit(1)
+      .get();
+
+    if (snapshot.empty) {
+      return NextResponse.json({ latest: null });
+    }
+
+    const data = snapshot.docs[0].data() as any;
+    const createdAtIso =
+      data?.createdAt && typeof data.createdAt.toDate === "function"
+        ? data.createdAt.toDate().toISOString()
+        : null;
+
+    const audioUrlRaw =
+      typeof data?.audioUrl === "string" ? data.audioUrl.trim() : "";
+    const audioDataUrlRaw =
+      typeof data?.audioDataUrl === "string" ? data.audioDataUrl.trim() : "";
+
+    return NextResponse.json({
+      latest: {
+        audioUrl: audioUrlRaw || audioDataUrlRaw || null,
+        transcript:
+          typeof data?.transcript === "string" && data.transcript.trim()
+            ? data.transcript
+            : null,
+        createdAt: createdAtIso,
+      },
+    });
+  } catch (err: any) {
+    if (err?.message === "UNAUTHENTICATED") {
+      return NextResponse.json({ error: "Unauthenticated" }, { status: 401 });
+    }
+    console.error("[voice-message/send] latest fetch failed:", err);
+    return NextResponse.json(
+      { error: err?.message || "Failed to load latest voice message" },
+      { status: 500 },
+    );
   }
 }

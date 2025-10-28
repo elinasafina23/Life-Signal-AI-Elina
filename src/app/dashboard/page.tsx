@@ -26,14 +26,7 @@ import {
   Firestore,
 } from "firebase/firestore";
 // --- Firestore (query helpers used for latest contact voice message in dialog) ---
-import {
-  collectionGroup,
-  getDocs,
-  limit,
-  orderBy,
-  query as fsQuery,
-  where,
-} from "firebase/firestore";
+import { collection, getDocs, limit, orderBy, query as fsQuery } from "firebase/firestore";
 
 import { onAuthStateChanged } from "firebase/auth";
 import { useRouter } from "next/navigation";
@@ -111,11 +104,13 @@ interface EmergencyContactsData {
   contact1_lastName?: string;
   contact1_email?: string;
   contact1_phone?: string;
+  contact1_emergencyContactUid?: string;
   emergencyServiceCountry?: EmergencyServiceCountryCode;
   contact2_firstName?: string;
   contact2_lastName?: string;
   contact2_email?: string;
   contact2_phone?: string;
+  contact2_emergencyContactUid?: string;
 }
 
 // ---- Subset of user doc we consume on this page ----
@@ -151,6 +146,7 @@ type ContactDialogState = {
   name: string;
   phone: string | null;
   email: string | null;
+  uid: string | null;
 };
 
 type LatestVoiceFromContact =
@@ -170,6 +166,10 @@ const LOCATION_SHARE_COOLDOWN_MS = 60_000; // Throttle repeated shares
 const GEO_PERMISSION_DENIED = 1;
 const GEO_POSITION_UNAVAILABLE = 2;
 const GEO_TIMEOUT = 3;
+
+// ---- Normalizers ----
+const normalizeEmail = (value?: string | null) =>
+  typeof value === "string" ? value.trim().toLowerCase() : "";
 
 // ---- Styling tokens ----
 const PRIMARY_CARD_BASE_CLASSES =
@@ -270,9 +270,11 @@ export default function DashboardPage() {
     useState<EmergencyServiceCountryCode>(DEFAULT_EMERGENCY_SERVICE_COUNTRY);
   const [primaryEmergencyContactPhone, setPrimaryEmergencyContactPhone] = useState<string | null>(null);
   const [primaryEmergencyContactEmail, setPrimaryEmergencyContactEmail] = useState<string | null>(null);
+  const [primaryEmergencyContactUid, setPrimaryEmergencyContactUid] = useState<string | null>(null);
   const [primaryEmergencyContactName, setPrimaryEmergencyContactName] = useState<string>("Emergency Contact 1");
   const [secondaryEmergencyContactPhone, setSecondaryEmergencyContactPhone] = useState<string | null>(null);
   const [secondaryEmergencyContactEmail, setSecondaryEmergencyContactEmail] = useState<string | null>(null);
+  const [secondaryEmergencyContactUid, setSecondaryEmergencyContactUid] = useState<string | null>(null);
   const [secondaryEmergencyContactName, setSecondaryEmergencyContactName] = useState<string>("Emergency Contact 2");
 
   // ---- Main user's own phone field (right column settings) ----
@@ -299,6 +301,7 @@ export default function DashboardPage() {
     name: "",
     phone: null,
     email: null,
+    uid: null,
   });
   const [latestVoiceFromContact, setLatestVoiceFromContact] = useState<LatestVoiceFromContact>(null);
   const latestAudioRef = useRef<HTMLAudioElement | null>(null);
@@ -358,9 +361,11 @@ export default function DashboardPage() {
         setPrimaryEmergencyContactName("Emergency Contact 1");
         setPrimaryEmergencyContactPhone(null);
         setPrimaryEmergencyContactEmail(null);
+        setPrimaryEmergencyContactUid(null);
         setSecondaryEmergencyContactName("Emergency Contact 2");
         setSecondaryEmergencyContactPhone(null);
         setSecondaryEmergencyContactEmail(null);
+        setSecondaryEmergencyContactUid(null);
         setVoiceMessageTarget(null);
         return;
       }
@@ -436,7 +441,16 @@ export default function DashboardPage() {
           setPrimaryEmergencyContactPhone(
             contacts.contact1_phone ? sanitizePhone(contacts.contact1_phone) || null : null,
           );
-          setPrimaryEmergencyContactEmail(contacts.contact1_email?.trim() || null);
+          const primaryEmailRaw =
+            typeof contacts.contact1_email === "string"
+              ? contacts.contact1_email.trim()
+              : "";
+          setPrimaryEmergencyContactEmail(primaryEmailRaw || null);
+          const primaryUidRaw =
+            typeof contacts.contact1_emergencyContactUid === "string"
+              ? contacts.contact1_emergencyContactUid.trim()
+              : "";
+          setPrimaryEmergencyContactUid(primaryUidRaw || null);
 
           const first2 = (contacts.contact2_firstName || "").trim();
           const last2 = (contacts.contact2_lastName || "").trim();
@@ -446,16 +460,27 @@ export default function DashboardPage() {
           setSecondaryEmergencyContactPhone(
             contacts.contact2_phone ? sanitizePhone(contacts.contact2_phone) || null : null,
           );
-          setSecondaryEmergencyContactEmail(contacts.contact2_email?.trim() || null);
+          const secondaryEmailRaw =
+            typeof contacts.contact2_email === "string"
+              ? contacts.contact2_email.trim()
+              : "";
+          setSecondaryEmergencyContactEmail(secondaryEmailRaw || null);
+          const secondaryUidRaw =
+            typeof contacts.contact2_emergencyContactUid === "string"
+              ? contacts.contact2_emergencyContactUid.trim()
+              : "";
+          setSecondaryEmergencyContactUid(secondaryUidRaw || null);
         } else {
           // Reset when empty
           setEmergencyServiceCountry(DEFAULT_EMERGENCY_SERVICE_COUNTRY);
           setPrimaryEmergencyContactName("Emergency Contact 1");
           setPrimaryEmergencyContactPhone(null);
           setPrimaryEmergencyContactEmail(null);
+          setPrimaryEmergencyContactUid(null);
           setSecondaryEmergencyContactName("Emergency Contact 2");
           setSecondaryEmergencyContactPhone(null);
           setSecondaryEmergencyContactEmail(null);
+          setSecondaryEmergencyContactUid(null);
         }
 
         setUserDocLoaded(true);
@@ -476,6 +501,83 @@ export default function DashboardPage() {
     if (!roleChecked || !mainUserUid) return;
     registerDevice(mainUserUid, "primary");
   }, [roleChecked, mainUserUid]);
+
+  // ---- Ensure we know each contact's emergencyContactUid ----
+  useEffect(() => {
+    if (!mainUserUid) return;
+    if (
+      (primaryEmergencyContactUid || !primaryEmergencyContactEmail) &&
+      (secondaryEmergencyContactUid || !secondaryEmergencyContactEmail)
+    ) {
+      return;
+    }
+
+    let cancelled = false;
+    (async () => {
+      try {
+        const snap = await getDocs(collection(db, `users/${mainUserUid}/emergency_contact`));
+        if (cancelled) return;
+
+        let resolvedPrimaryUid = primaryEmergencyContactUid || "";
+        let resolvedSecondaryUid = secondaryEmergencyContactUid || "";
+        const primaryEmailNorm = normalizeEmail(primaryEmergencyContactEmail);
+        const secondaryEmailNorm = normalizeEmail(secondaryEmergencyContactEmail);
+
+        snap.docs.forEach((docSnap) => {
+          const data = docSnap.data() as any;
+          const candidateUid =
+            typeof data?.emergencyContactUid === "string" && data.emergencyContactUid.trim()
+              ? data.emergencyContactUid.trim()
+              : docSnap.id;
+          const relation =
+            typeof data?.relation === "string"
+              ? data.relation.trim().toLowerCase()
+              : "";
+          const docEmailNorm = normalizeEmail(data?.emergencyContactEmail);
+
+          if (!resolvedPrimaryUid) {
+            if (relation === "primary") {
+              resolvedPrimaryUid = candidateUid;
+            } else if (primaryEmailNorm && docEmailNorm && docEmailNorm === primaryEmailNorm) {
+              resolvedPrimaryUid = candidateUid;
+            }
+          }
+
+          if (!resolvedSecondaryUid) {
+            if (relation === "secondary") {
+              resolvedSecondaryUid = candidateUid;
+            } else if (
+              secondaryEmailNorm &&
+              docEmailNorm &&
+              docEmailNorm === secondaryEmailNorm
+            ) {
+              resolvedSecondaryUid = candidateUid;
+            }
+          }
+        });
+
+        if (resolvedPrimaryUid && resolvedPrimaryUid !== primaryEmergencyContactUid) {
+          setPrimaryEmergencyContactUid(resolvedPrimaryUid);
+        }
+        if (resolvedSecondaryUid && resolvedSecondaryUid !== secondaryEmergencyContactUid) {
+          setSecondaryEmergencyContactUid(resolvedSecondaryUid);
+        }
+      } catch (error) {
+        console.warn("Failed to load emergency contact links", error);
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    db,
+    mainUserUid,
+    primaryEmergencyContactEmail,
+    primaryEmergencyContactUid,
+    secondaryEmergencyContactEmail,
+    secondaryEmergencyContactUid,
+  ]);
 
   // ---- Derived: next check-in time ----
   const nextCheckIn = useMemo(() => {
@@ -1068,38 +1170,50 @@ export default function DashboardPage() {
       const name = isPrimary ? primaryEmergencyContactName : secondaryEmergencyContactName;
       const phone = isPrimary ? primaryEmergencyContactPhone : secondaryEmergencyContactPhone;
       const email = isPrimary ? primaryEmergencyContactEmail : secondaryEmergencyContactEmail;
+      const uid = isPrimary ? primaryEmergencyContactUid : secondaryEmergencyContactUid;
+      const normalizedUid = typeof uid === "string" ? uid.trim() : "";
 
-      setContactDialog({ open: true, kind, name, phone, email });
+      setContactDialog({ open: true, kind, name, phone, email, uid: normalizedUid || null });
 
       // Optional: best-effort fetch of the latest voice message from this contact to the main user.
-      if (!mainUserUid || !email) {
+      if (!mainUserUid || !normalizedUid) {
         setLatestVoiceFromContact(null);
         return;
       }
       try {
-        // Use a composite query if both are available, otherwise query by the available field.
-        // Note: Firestore queries with OR conditions require an index.
-        // Note: The "fromEmergencyContactUid" field will be added later when EC accounts are implemented.
         const q = fsQuery(
           collection(db, `users/${mainUserUid}/contactVoiceMessages`),
-          where("fromEmail", "==", email), // EC UID will be added here later
           orderBy("createdAt", "desc"),
-          limit(1),
+          limit(20),
         );
         const snap = await getDocs(q);
         if (snap.empty) {
           setLatestVoiceFromContact(null);
         } else {
-          const d = snap.docs[0].data() as any;
+          const match = snap.docs
+            .map((doc) => doc.data() as any)
+            .find((docData) => {
+              const fromUid =
+                typeof docData?.fromEmergencyContactUid === "string"
+                  ? docData.fromEmergencyContactUid.trim()
+                  : "";
+              return fromUid && fromUid === normalizedUid;
+            });
+
+          if (!match) {
+            setLatestVoiceFromContact(null);
+            return;
+          }
+
           setLatestVoiceFromContact({
             audioUrl:
-              typeof d?.audioUrl === "string" && d.audioUrl.trim()
-                ? d.audioUrl
-                : typeof d?.audioDataUrl === "string"
-                ? d.audioDataUrl
+              typeof match?.audioUrl === "string" && match.audioUrl.trim()
+                ? match.audioUrl
+                : typeof match?.audioDataUrl === "string"
+                ? match.audioDataUrl
                 : "",
-            createdAt: d?.createdAt?.toDate ? d.createdAt.toDate() : null,
-            transcript: typeof d?.transcript === "string" ? d.transcript : undefined,
+            createdAt: match?.createdAt?.toDate ? match.createdAt.toDate() : null,
+            transcript: typeof match?.transcript === "string" ? match.transcript : undefined,
           });
         }
       } catch (e) {
@@ -1113,14 +1227,16 @@ export default function DashboardPage() {
       primaryEmergencyContactEmail,
       primaryEmergencyContactName,
       primaryEmergencyContactPhone,
+      primaryEmergencyContactUid,
       secondaryEmergencyContactEmail,
       secondaryEmergencyContactName,
       secondaryEmergencyContactPhone,
+      secondaryEmergencyContactUid,
     ],
   );
 
   const closeContactDialog = useCallback(() => {
-    setContactDialog((s) => ({ ...s, open: false }));
+    setContactDialog((s) => ({ ...s, open: false, uid: null }));
     setLatestVoiceFromContact(null);
     try {
       latestAudioRef.current?.pause();
@@ -1704,7 +1820,3 @@ export default function DashboardPage() {
     </>
   );
 }
-function collection(db: Firestore, arg1: string): import("@firebase/firestore").Query<unknown, import("@firebase/firestore").DocumentData> {
-  throw new Error("Function not implemented.");
-}
-

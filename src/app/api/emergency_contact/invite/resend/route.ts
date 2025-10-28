@@ -1,6 +1,4 @@
 // src/app/api/emergency_contact/resend/route.ts
-
-// Next 13/14: ensure this API route runs on the Node.js runtime
 export const runtime = "nodejs";
 
 import { NextRequest, NextResponse } from "next/server";
@@ -9,47 +7,36 @@ import crypto from "crypto";
 import { db, adminAuth } from "@/lib/firebaseAdmin";
 import { normalizeRole, isMainUserRole } from "@/lib/roles";
 
-/**
- * Normalize emails for comparison:
- * - lowercase
- * - for Gmail: strip dots and +tags (so a.b+c@gmail.com == ab@gmail.com)
- */
-function normalizeEmail(e?: string | null) {
-  const v = (e || "").trim().toLowerCase();
-  const [local = "", domain = ""] = v.split("@");
-  if (domain === "gmail.com" || domain === "googlemail.com") {
-    const clean = local.split("+")[0].replace(/\./g, "");
-    return `${clean}@gmail.com`;
-  }
-  return v;
-}
+/** ---------- Helpers ---------- **/
 
-/**
- * Require that the caller is:
- *  - authenticated (via our server session cookie)
- *  - AND has a "main user" role
- *
- * Returns the caller's uid as mainUserUid.
- */
-async function requireMainUser(req: NextRequest) {
-  const cookie = req.cookies.get("__session")?.value || "";
-  if (!cookie) throw new Error("UNAUTHENTICATED");
+/** Normalize emails for consistent storage & lookup */
+function normalizeEmail(raw: string) {
+  if (!raw) return { email: "", emailNormalized: "" };
+  const email = String(raw).trim().toLowerCase();
+  const [local, domain] = email.split("@");
+  if (!local || !domain) return { email, emailNormalized: email };
 
-  let decoded;
-  try {
-    decoded = await adminAuth.verifySessionCookie(cookie, true);
-  } catch {
-    throw new Error("UNAUTHENTICATED");
+  // Gmail-style normalization: remove dots and +tags
+  let normLocal = local;
+  const isGmail =
+    domain === "gmail.com" ||
+    domain === "googlemail.com" ||
+    domain.endsWith(".gmail"); // safety no-op
+
+  if (isGmail) {
+    const plusIdx = normLocal.indexOf("+");
+    if (plusIdx >= 0) normLocal = normLocal.slice(0, plusIdx);
+    normLocal = normLocal.replace(/\./g, "");
   }
 
-  const snap = await db.doc(`users/${decoded.uid}`).get();
-  const role = normalizeRole((snap.data() as any)?.role);
-  if (!isMainUserRole(role)) throw new Error("NOT_AUTHORIZED");
-
-  return { uid: decoded.uid as string }; // ← we’ll call this mainUserUid below
+  const emailNormalized = `${normLocal}@${domain}`;
+  return { email, emailNormalized };
 }
 
-/** Resolve the deployed origin so we can build absolute links. */
+function looksLikeEmail(e: string) {
+  return !!e && e.includes("@") && e.includes(".");
+}
+
 function getOrigin(req: NextRequest) {
   return (
     process.env.APP_ORIGIN ||
@@ -58,148 +45,154 @@ function getOrigin(req: NextRequest) {
   );
 }
 
-/**
- * POST /api/emergency_contact/resend
- *
- * Body:
- *  {
- *    email: string,          // required – who we’re re-inviting
- *    name?: string | null,   // optional – for email greeting
- *    relation?: string       // optional – e.g. "primary", "secondary"
- *  }
- *
- * Effects:
- *  - Creates a new invite in /invites (fresh token, 7-day expiry)
- *  - Upserts tracker /emergencyContacts/{mainUserUid_email}
- *  - Sends an email with the new link
- *  - Preserves ACTIVE status if the contact already accepted before
- */
+/** Require authenticated main-user; returns uid */
+async function requireMainUser(req: NextRequest) {
+  const sessionCookie = req.cookies.get("__session")?.value || "";
+  if (!sessionCookie) throw new Error("UNAUTHENTICATED");
+
+  const decoded = await adminAuth
+    .verifySessionCookie(sessionCookie, true)
+    .catch(() => null);
+  if (!decoded?.uid) throw new Error("UNAUTHENTICATED");
+
+  // Optional: also support Authorization: Bearer <idToken>
+  const authz = req.headers.get("authorization");
+  if (authz?.toLowerCase().startsWith("bearer ")) {
+    const idToken = authz.slice(7).trim();
+    const decodedAlt = await adminAuth.verifyIdToken(idToken).catch(() => null);
+    if (decodedAlt?.uid && decodedAlt.uid !== decoded.uid) {
+      // If both exist but mismatch, reject
+      throw new Error("UNAUTHENTICATED");
+    }
+  }
+
+  // Ensure role
+  const userSnap = await db.collection("users").doc(decoded.uid).get();
+  const userData = userSnap.exists ? userSnap.data() : {};
+  const role = normalizeRole(userData?.role);
+  if (!isMainUserRole(role)) throw new Error("NOT_AUTHORIZED");
+
+  return decoded.uid;
+}
+
+/** Fetch lightweight main-user profile fields for display */
+async function getMainUserProfile(uid: string) {
+  const doc = await db.collection("users").doc(uid).get();
+  const d = doc.exists ? doc.data() || {} : {};
+  return {
+    uid,
+    name: d.displayName || d.name || "",
+    avatar: d.photoURL || d.avatarUrl || "",
+  };
+}
+
+/** Create new token & stable hash for storage */
+function makeTokenPair() {
+  const token = crypto.randomBytes(32).toString("hex");
+  const tokenHash = crypto.createHash("sha256").update(token).digest("hex");
+  return { token, tokenHash };
+}
+
+/** Build the accept URL sent to the recipient */
+function makeAcceptUrl(origin: string, token: string) {
+  const url = new URL("/emergency-contact/accept", origin);
+  url.searchParams.set("token", token);
+  return url.toString();
+}
+
+/** Path to invites — keep it consistent everywhere */
+function invitesCol() {
+  return db.collection("emergency_invites");
+}
+
+/** ---------- POST (resend/create) ---------- **/
 export async function POST(req: NextRequest) {
   try {
-    // Ensure the caller is a main user
-    const { uid: mainUserUid } = await requireMainUser(req);
+    const mainUserUid = await requireMainUser(req);
+    const { email: rawEmail, role: rawRole } = await req.json();
 
-    // Parse body (safe fallback to empty object)
-    const body = await req.json().catch(() => ({} as any));
-
-    // Extract/normalize inputs
-    const email = body?.email as string | undefined;
-    const name = (body?.name as string | undefined) || null;
-    const relation = (body?.relation as string | undefined) ?? "primary";
-    const emergencyContactEmail = normalizeEmail(String(email ?? ""));
-
-    // Validate email
-    if (!emergencyContactEmail) {
-      return NextResponse.json({ error: "Email required" }, { status: 400 });
+    if (!looksLikeEmail(rawEmail)) {
+      return NextResponse.json({ error: "Invalid email" }, { status: 400 });
     }
 
-    /**
-     * Deterministic tracker doc ID to group all invites/links for
-     * (mainUserUid, emergencyContactEmail). Handy for status/resends.
-     */
-    const emergencyContactId = `${mainUserUid}_${emergencyContactEmail}`;
-    const emergencyContactRef = db.doc(`emergencyContacts/${emergencyContactId}`);
-    const ecSnap = await emergencyContactRef.get();
+    const { email, emailNormalized } = normalizeEmail(rawEmail);
+    const role = normalizeRole(rawRole || "emergency_contact");
 
-    // Best-effort enrichment for email content
-    let mainUserName = "";
-    let mainUserAvatar = "";
-    try {
-      const mu = await db.doc(`users/${mainUserUid}`).get();
-      const m = mu.data() as any;
-      mainUserName = m?.displayName || m?.name || "";
-      mainUserAvatar = m?.photoURL || m?.avatar || "";
-    } catch {
-      /* ignore */
+    // Read main user's display info (to return to client)
+    const mainUser = await getMainUserProfile(mainUserUid);
+
+    // Upsert a pending invite (idempotent by mainUserUid + recipientEmailNormalized + role)
+    const existingQ = await invitesCol()
+      .where("mainUserUid", "==", mainUserUid)
+      .where("recipientEmailNormalized", "==", emailNormalized)
+      .where("role", "==", role)
+      .orderBy("createdAt", "desc")
+      .limit(1)
+      .get();
+
+    const { token, tokenHash } = makeTokenPair();
+    const now = new Date();
+    const expiresAt = new Date(now.getTime() + 1000 * 60 * 60 * 24 * 7); // 7 days
+
+    let inviteRef = invitesCol().doc();
+    let status = "pending";
+
+    if (!existingQ.empty) {
+      // Reuse the latest doc if still pending; otherwise create a new doc
+      const doc = existingQ.docs[0];
+      const d = doc.data() || {};
+      if (d.status && d.status !== "pending") {
+        // don’t overwrite accepted/revoked—issue a new pending invite
+        inviteRef = invitesCol().doc();
+      } else {
+        inviteRef = doc.ref; // resend case
+      }
     }
 
-    // Create a fresh invite token (random), and store its hash too
-    const token = crypto.randomBytes(32).toString("hex");
-    const tokenHash = crypto.createHash("sha256").update(token).digest("hex");
-    const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000); // 7 days
+    await inviteRef.set(
+      {
+        mainUserUid,
+        mainUserName: mainUser.name,
+        mainUserAvatar: mainUser.avatar,
+        recipientEmail: email,
+        recipientEmailNormalized: emailNormalized,
+        role,
+        tokenHash,
+        status, // 'pending'
+        createdAt: FieldValue.serverTimestamp(),
+        updatedAt: FieldValue.serverTimestamp(),
+        // expiresAt as a JS Date is fine; Admin SDK will store as a Timestamp.
+        expiresAt,
+      },
+      { merge: true }
+    );
 
-    // Batch writes for atomicity
-    const batch = db.batch();
-
-    /**
-     * Create a NEW invite doc.
-     * Write BOTH mainUserUid (canonical) and mainUserId (legacy mirror)
-     * to avoid breaking any older code that still reads "mainUserId".
-     * Once everything reads "mainUserUid", you can remove mainUserId safely.
-     */
-    const inviteRef = db.collection("invites").doc();
-    batch.set(inviteRef, {
-      mainUserUid,                // ✅ canonical, new
-      mainUserId: mainUserUid,    // 🧰 legacy mirror (safe to drop later)
-      role: "emergency_contact",
-      emergencyContactEmail,
-      relation,
-      status: "PENDING",
-      token,                      // (kept for convenience; hash is what we trust)
-      tokenHash,
-      name,
-      mainUserName,
-      mainUserAvatar,
-      createdAt: FieldValue.serverTimestamp(),
-      acceptedAt: null,
-      expiresAt,                  // JS Date is fine with Admin SDK
-    });
-
-    /**
-     * Upsert/refresh the top-level tracker doc.
-     * If it was previously ACTIVE (already accepted), KEEP it ACTIVE.
-     * Otherwise ensure it's PENDING.
-     */
-    let nextStatus: "ACTIVE" | "PENDING" = "PENDING";
-    if (ecSnap.exists && ecSnap.get("status") === "ACTIVE") nextStatus = "ACTIVE";
-
-    const ecPayload: any = {
-      id: emergencyContactId,
-      mainUserUid,                 // ✅ standardized naming
-      emergencyContactEmail,
-      status: nextStatus,
-      updatedAt: FieldValue.serverTimestamp(),
-    };
-    if (!ecSnap.exists) {
-      ecPayload.createdAt = FieldValue.serverTimestamp();
-      ecPayload.emergencyContactUid = null; // will be set by /accept on success
-    }
-    batch.set(emergencyContactRef, ecPayload, { merge: true });
-
-    // Commit our writes
-    await batch.commit();
-
-    // Build the acceptance URL
+    // Queue email (adjust to your mailer — Firestore-triggered or HTTP call)
     const origin = getOrigin(req);
-    const acceptUrl = `${origin}/emergency_contact/accept?invite=${inviteRef.id}&token=${token}`;
+    const acceptUrl = makeAcceptUrl(origin, token);
 
-    /**
-     * Optional: If you enforce verified email before acceptance,
-     * send them to /verify-email first, then continue to acceptUrl.
-     */
-    const verifyContinue = `${origin}/verify-email?next=${encodeURIComponent(acceptUrl)}`;
-
-    // Send the email using your /mail collection (Firebase Ext or your mail worker)
+    // Example: Firestore-triggered "mail" collection (e.g. via Firebase Extensions)
     await db.collection("mail").add({
-      to: [emergencyContactEmail],
-      message: {
-        subject: "You’ve been added as an emergency contact",
-        html: `
-          <p>Hello${name ? " " + name : ""},</p>
-          <p>You’ve been invited to be an <strong>emergency contact</strong>.</p>
-          <p><a href="${acceptUrl}">Accept invitation</a> (link expires in 7 days).</p>
-          <p>If the link doesn't work, copy this URL:<br>${acceptUrl}</p>
-        `,
+      to: email,
+      template: "emergency_invite",
+      createdAt: FieldValue.serverTimestamp(),
+      data: {
+        acceptUrl,
+        inviterName: mainUser.name || "Your contact",
+        inviterAvatar: mainUser.avatar || "",
+        role,
       },
     });
 
-    // Respond with useful info for the client UI
+    // Return a rich payload so the client can immediately render
     return NextResponse.json({
       ok: true,
       inviteId: inviteRef.id,
+      // If your client sends the email itself, it may need the token & URL:
+      token,
       acceptUrl,
-      verifyContinue,
-      emergencyContactId,
+      // Always include the main user's display info for the EC page:
+      mainUser,
     });
   } catch (e: any) {
     if (e?.message === "UNAUTHENTICATED") {

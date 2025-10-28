@@ -1,8 +1,9 @@
+
 // src/components/emergency-contact.tsx
 "use client";
 
 /* ---------------- React ---------------- */
-import { useEffect, useState } from "react";
+import { forwardRef, useEffect, useImperativeHandle, useState } from "react";
 
 /* ---------------- Firebase ---------------- */
 import { onAuthStateChanged } from "firebase/auth";
@@ -46,6 +47,7 @@ import {
 
 /* ---------------- Invites ---------------- */
 import { inviteEmergencyContact as sendInvite } from "@/lib/inviteEmergencyContact";
+import { resendEmergencyContact } from "@/lib/resendEmergencyContact";
 
 /* ============================================================================
    Validation (Zod)  — Telnyx-friendly E.164 phone numbers
@@ -134,7 +136,11 @@ const normEmail = (e?: string | null) => (e || "").trim().toLowerCase();
    Component
    ========================================================================== */
 
-export function EmergencyContacts() {
+export interface EmergencyContactsHandle {
+  openDialog: () => void;
+}
+
+export const EmergencyContacts = forwardRef<EmergencyContactsHandle, {}>((_props, ref) => {
   const { toast } = useToast();
 
   const [uid, setUid] = useState<string | null>(null);
@@ -148,6 +154,10 @@ export function EmergencyContacts() {
     defaultValues: contacts,
     mode: "onBlur",
   });
+
+  useImperativeHandle(ref, () => ({
+    openDialog: () => setIsDialogOpen(true),
+  }));
 
   /* ---------------- Load Firestore on auth change ---------------- */
   useEffect(() => {
@@ -337,7 +347,8 @@ export function EmergencyContacts() {
         ? fullName(contacts.contact1_firstName, contacts.contact1_lastName)
         : fullName(contacts.contact2_firstName, contacts.contact2_lastName);
 
-      await sendInvite({ email: target, name, relation });
+        await resendEmergencyContact({ email: target, name, relation });
+
       toast({ title: "Invite sent", description: `We sent a new invite to ${target}.` });
     } catch (e: any) {
       toast({ title: "Could not resend", description: e?.message ?? "Please try again.", variant: "destructive" });
@@ -602,6 +613,8 @@ export function EmergencyContacts() {
       </CardContent>
     </Card>
   );
-}
+});
+
+EmergencyContacts.displayName = "EmergencyContacts";
 
 export default EmergencyContacts;
