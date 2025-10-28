@@ -7,7 +7,7 @@ import React, { useRef, useState, useEffect } from "react";
  * Works in a PWA; the OS will open the dialer on mobile.
  */
 export default function SosCallButton({
-  phoneNumber = process.env.NEXT_PUBLIC_SOS_NUMBER ?? "+12243631285",
+  phoneNumber = process.env.NEXT_PUBLIC_SOS_NUMBER ?? "+1224",
   contactName = "Emergency Contact",
   holdToActivateMs = 1000,
   confirm = true,

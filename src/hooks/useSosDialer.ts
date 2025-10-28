@@ -14,7 +14,7 @@ export function useSosDialer(opts?: {
   onActivate?: () => void | Promise<void>;
 }) {
   const {
-    phoneNumber = "+18473454308",
+    phoneNumber = "+1847",
     contactName = "Emergency Contact",
     holdToActivateMs = 1500,
     confirm = true,

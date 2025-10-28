@@ -126,7 +126,8 @@ export async function POST(req: NextRequest) {
       .where("mainUserUid", "==", mainUserUid)
       .where("recipientEmailNormalized", "==", emailNormalized)
       .where("role", "==", role)
-      .orderBy("createdAt", "desc")
+      .where("status", "==", "pending")           // ✅ NEW: reuse only a pending invite
+
       .limit(1)
       .get();
 

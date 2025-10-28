@@ -39,6 +39,7 @@ export async function resendEmergencyContact(
       name: (input.name || "").trim() || undefined,
       email: input.email.trim(),
       relation: (input.relation as InviteRelation) || undefined,
+      role: "emergency_contact",
     };
 
     const res = await fetch("/api/emergency_contact/invite/resend", {

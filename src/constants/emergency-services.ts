@@ -22,7 +22,7 @@ export const EMERGENCY_SERVICE_COUNTRY_VALUES = [
     EmergencyServiceCountryCode,
     EmergencyServiceDetails
   > = {
-    US: { label: "United States / Canada", dial: "+12243631285" },
+    US: { label: "United States / Canada", dial: "+1224" },
     CA: { label: "Canada", dial: "911" },
     MX: { label: "Mexico", dial: "911" },
     BR: { label: "Brazil", dial: "190" },
