@@ -10,7 +10,7 @@ import { Button } from "@/components/ui/button";
 import { normalizeRole, Role } from "@/lib/roles";
 
 /* ---------------- Constants used for redirects ---------------- */
-const ACCEPT_API = "/api/emergency_contact/accept"; // server route to accept inviter’s token
+const ACCEPT_API = "/api/emergency-contact/accept"; // server route to accept inviter’s token
 const EMERGENCY_DASH = "/emergency-dashboard";      // destination for emergency contacts
 const MAIN_DASH = "/dashboard";                     // destination for main users
 
@@ -120,7 +120,7 @@ function VerifyEmailPageContent() {
 
   /** Choose where to go after successful verification based on role (or nextParam if present). */
   const desiredDestination = (role: Role) =>
-    nextParam || (role === "emergency_contact" ? EMERGENCY_DASH : MAIN_DASH);
+    nextParam || (role === "emergency-contact" ? EMERGENCY_DASH : MAIN_DASH);
 
   /**
    * Try to accept an emergency-contact invite token.
@@ -155,8 +155,8 @@ function VerifyEmailPageContent() {
       // Unauthenticated → go to login (preserve token + desired next).
       if (res.status === 401) {
         router.replace(
-          `/login?role=emergency_contact&next=${encodeURIComponent(
-            desiredDestination("emergency_contact")
+          `/login?role=emergency-contact&next=${encodeURIComponent(
+            desiredDestination("emergency-contact")
           )}&token=${encodeURIComponent(token)}&verified=1`
         );
         return false;
@@ -164,7 +164,7 @@ function VerifyEmailPageContent() {
 
       // Authenticated but wrong account/email → show accept page (has sign-out flow).
       if (res.status === 403) {
-        router.replace(`/emergency_contact/accept?token=${encodeURIComponent(token)}`);
+        router.replace(`/emergency-contact/accept?token=${encodeURIComponent(token)}`);
         return false;
       }
 
@@ -218,7 +218,7 @@ function VerifyEmailPageContent() {
           await auth.currentUser.reload();                 // make sure emailVerified is current
           const role = await resolveRole(auth.currentUser.uid, params.get("role"));
 
-          // Accept invite whenever a token exists (not only for emergency_contact).
+          // Accept invite whenever a token exists (not only for emergency-contact).
           if (token) {
             const ok = await tryAcceptInvite();
             if (!ok) return;                               // we navigated away inside tryAcceptInvite
@@ -287,10 +287,13 @@ function VerifyEmailPageContent() {
         setStatus("Not signed in. Please sign in again.");
         return;
       }
-      await sendEmailVerification(u, {
-        url: continueUrl,          // where the “Verify” button brings them back
-        handleCodeInApp: true,     // we handle the code here
-      });
+      const origin = window.location.origin; // safe here because this is a client component
+await sendEmailVerification(u, {
+  url: continueUrl,      // ← points back to /verify-email?role=...&next=...&token=...
+  handleCodeInApp: true, // ← Firebase returns to this page with mode & oobCode
+});            // 👈 Firebase verifies and then redirects to the URL
+
+
       setStatus(`Verification email sent to ${u.email}. Check inbox/spam.`);
     } catch (err) {
       console.error(err);

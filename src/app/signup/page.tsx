@@ -32,6 +32,7 @@ import {
 } from "@/components/ui/form";
 import { Input } from "@/components/ui/input";
 import { Progress } from "@/components/ui/progress";
+import { Checkbox } from "@/components/ui/checkbox"; // Import Checkbox
 import { useToast } from "@/hooks/use-toast"; // Custom toast hook
 
 // Firebase imports
@@ -80,6 +81,9 @@ const signupSchema = z
     ),
     password: passwordValidation, // Apply password policy
     confirmPassword: z.string(), // For password confirmation
+    termsConsent: z.boolean().refine((val) => val, {
+      message: "You must accept the Terms of Service and Privacy Policy to continue.",
+    }),
   })
   // Cross-field validation: password === confirmPassword
   .refine((data) => data.password === data.confirmPassword, {
@@ -107,7 +111,7 @@ async function setSessionCookieFast() {
 // If sign-up was triggered by an invite token, auto-accept in the background
 async function maybeAutoAcceptInvite(token: string | null) {
   if (!token) return;
-  fetch("/api/emergency_contact/accept", {
+  fetch("/api/emergency-contact/accept", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     credentials: "include",
@@ -138,12 +142,23 @@ function SignupPageContent() {
   const role: Role = normalizeRole(params.get("role")) ?? "main_user";
   const token = params.get("token") || null; // Optional invite token
 
+  // Get the main user's UID from the URL, but only if signing up as an emergency contact.
+  const mainUserUidFromParams = role === "emergency-contact" ? params.get("mainUserUid") : null;
+
   // "next" param (used for redirect after login)
-  const rawNext = params.get("next");
-  const next = useMemo(() => {
-    const n = rawNext && rawNext.startsWith("/") ? rawNext : "";
-    return n === "/" ? "" : n; // Clean "/" → ""
-  }, [rawNext]);
+  const rawNextFromUrl = params.get("next");
+
+  // ✅ **FIX:** If the user is an emergency contact, their final destination is the
+  // emergency dashboard. Otherwise, use the 'next' param or default to the main dashboard.
+  // This prevents the redirect loop back to the 'accept' page.
+  const finalNextDestination = useMemo(() => {
+    if (role === "emergency-contact") {
+      return "/emergency-dashboard";
+    }
+    const n = rawNextFromUrl && rawNextFromUrl.startsWith("/") ? rawNextFromUrl : "";
+    // Default to /dashboard if 'next' is missing or just "/"
+    return n && n !== "/" ? n : "/dashboard";
+  }, [role, rawNextFromUrl]);
 
   // Get origin for building verify URL
   const origin =
@@ -152,15 +167,18 @@ function SignupPageContent() {
       : process.env.NEXT_PUBLIC_APP_ORIGIN || "";
 
   // Build continueUrl for Firebase email verification link
+  // This link will be opened by the user to verify their email.
   const continueUrl = useMemo(() => {
     const q = new URLSearchParams({
       role,
       fromHosted: "1",
-      ...(next ? { next } : {}),
+      // Pass the correct final destination to the verify-email page.
+      ...(finalNextDestination ? { next: finalNextDestination } : {}),
+      // Also pass the token so the verify-email page can finalize the acceptance.
       ...(token ? { token } : {}),
     }).toString();
     return `${origin}/verify-email?${q}`;
-  }, [origin, role, next, token]);
+  }, [origin, role, finalNextDestination, token]);
 
   // Local state for password meter & loading spinner
   const [passwordStrength, setPasswordStrength] = useState(0);
@@ -176,6 +194,7 @@ function SignupPageContent() {
       phone: "",
       password: "",
       confirmPassword: "",
+      termsConsent: false, // Default value for the new field
     },
   });
 
@@ -198,6 +217,16 @@ function SignupPageContent() {
   /*                               SUBMIT LOGIC                             */
   /* ---------------------------------------------------------------------- */
   const onSubmit = async (values: z.infer<typeof signupSchema>) => {
+    // For emergency contacts, we must have the main user's UID to link them.
+    if (role === "emergency-contact" && !mainUserUidFromParams) {
+      toast({
+        title: "Signup Error",
+        description: "The original inviter could not be identified. Please use the link from your email again.",
+        variant: "destructive",
+      });
+      return;
+    }
+
     try {
       setIsSubmitting(true);
 
@@ -220,7 +249,8 @@ function SignupPageContent() {
       await setDoc(
         doc(db, "users", cred.user.uid),
         {
-          mainUserUid: cred.user.uid,
+          // Use the inviter's UID for emergency contacts, otherwise self-reference for main users.
+          mainUserUid: mainUserUidFromParams || cred.user.uid,
           firstName: values.firstName.trim(),
           lastName: values.lastName.trim(),
           role,
@@ -251,10 +281,10 @@ function SignupPageContent() {
       })();
 
       // 6️⃣ Redirect to verify-email page
+      // This step just tells the user we sent an email. The REAL redirect happens
+      // when they click the link in that email (which uses 'continueUrl').
       router.push(
-        `/verify-email?email=${encodeURIComponent(values.email)}&role=${encodeURIComponent(role)}${
-          next ? `&next=${encodeURIComponent(next)}` : ""
-        }${token ? `&token=${encodeURIComponent(token)}` : ""}`
+        `/verify-email?email=${encodeURIComponent(values.email)}&role=${encodeURIComponent(role)}`
       );
     } catch (err: any) {
       // Handle Firebase errors cleanly
@@ -279,7 +309,7 @@ function SignupPageContent() {
           break;
       }
       toast({ title: "Signup failed", description: message, variant: "destructive" });
-    } finally {
+      // ✅ Only reset state on error, to allow navigation to proceed on success.
       setIsSubmitting(false);
     }
   };
@@ -296,7 +326,7 @@ function SignupPageContent() {
           <CardHeader className="text-center">
             <CardTitle className="text-3xl font-headline">Create Your Account</CardTitle>
             <CardDescription>
-              {role === "emergency_contact"
+              {role === "emergency-contact"
                 ? "You’re signing up as an emergency contact."
                 : "Create your main user account."}
             </CardDescription>
@@ -433,6 +463,45 @@ function SignupPageContent() {
                     </FormItem>
                   )}
                 />
+
+                {/* Consent Checkbox */}
+                <FormField
+                  control={form.control}
+                  name="termsConsent"
+                  render={({ field }) => (
+                    <FormItem className="flex flex-row items-start space-x-3 space-y-0 rounded-md border p-4">
+                      <FormControl>
+                        <Checkbox
+                          checked={field.value}
+                          onCheckedChange={field.onChange}
+                          disabled={isSubmitting}
+                        />
+                      </FormControl>
+                      <div className="space-y-1 leading-none">
+                        <FormLabel>
+                          I agree to the{" "}
+                          <Link
+                            href="/terms-of-service"
+                            target="_blank"
+                            className="text-primary hover:underline"
+                          >
+                            Terms of Service
+                          </Link>{" "}
+                          and{" "}
+                          <Link
+                            href="/privacy-policy"
+                            target="_blank"
+                            className="text-primary hover:underline"
+                          >
+                            Privacy Policy
+                          </Link>
+                          .
+                        </FormLabel>
+                        <FormMessage />
+                      </div>
+                    </FormItem>
+                  )}
+                />
               </CardContent>
 
               {/* ---- Footer ---- */}
@@ -446,9 +515,7 @@ function SignupPageContent() {
                 <p className="text-center text-sm text-muted-foreground">
                   Already have an account?{" "}
                   <Link
-                    href={`/login?role=${encodeURIComponent(role)}${
-                      next ? `&next=${encodeURIComponent(next)}` : ""
-                    }${token ? `&token=${encodeURIComponent(token)}` : ""}`}
+                    href={`/login?role=${encodeURIComponent(role)}&next=${encodeURIComponent(finalNextDestination)}&token=${encodeURIComponent(token || '')}`}
                     className="font-semibold text-primary hover:underline"
                   >
                     Sign In

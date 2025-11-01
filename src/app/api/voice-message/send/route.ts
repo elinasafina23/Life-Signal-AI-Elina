@@ -136,13 +136,13 @@ export async function POST(req: NextRequest) {
 
     // ㉛ Fetch TWO mirrors of EC links:
     //     A) Top-level `/emergencyContacts` (often used by admin/push flows; some installs mark ACTIVE there)
-    //     B) Per-main-user subcollection `/users/{mainUserUid}/emergency_contact/*` (what EC dashboard usually reads)
+    //     B) Per-main-user subcollection `/users/{mainUserUid}/emergency-contact/*` (what EC dashboard usually reads)
     const [topSnap, subSnap] = await Promise.all([
       db
         .collection("emergencyContacts")
         .where("mainUserUid", "==", mainUserUid)
         .get(), // ← no status filter here; we’ll filter by match next
-      db.collection(`users/${mainUserUid}/emergency_contact`).get(),
+      db.collection(`users/${mainUserUid}/emergency-contact`).get(),
     ]);
 
     // ㉜ Find the *single* intended contact by email/phone across BOTH sets.

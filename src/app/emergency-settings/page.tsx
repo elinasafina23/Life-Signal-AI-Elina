@@ -22,7 +22,7 @@ export default function EmergencySettingsPage() {
     const unsub = onAuthStateChanged(auth, async (user) => {
       if (!user) {
         router.replace(
-          `/login?role=emergency_contact&next=${encodeURIComponent("/emergency-settings")}`
+          `/login?role=emergency-contact&next=${encodeURIComponent("/emergency-settings")}`
         );
         return;
       }
@@ -31,13 +31,13 @@ export default function EmergencySettingsPage() {
       try {
         const meSnap = await getDoc(doc(db, "users", user.uid));
         const myRole = normalizeRole(meSnap.exists() ? (meSnap.data() as any).role : undefined);
-        if (myRole !== "emergency_contact") {
+        if (myRole !== "emergency-contact") {
           router.replace("/dashboard");
           return;
         }
       } catch {
         router.replace(
-          `/login?role=emergency_contact&next=${encodeURIComponent("/emergency-settings")}`
+          `/login?role=emergency-contact&next=${encodeURIComponent("/emergency-settings")}`
         );
         return;
       }

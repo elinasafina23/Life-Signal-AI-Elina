@@ -12,6 +12,7 @@ import {z} from 'genkit';
 
 const AssessVoiceCheckInInputSchema = z.object({
   transcribedSpeech: z.string().describe('The transcribed speech from the user voice check-in.'),
+  audioUri: z.string().describe('The URI to the voice message audio file in Cloud Storage.'), 
   previousVoiceMessages: z.array(z.string()).describe('An array of previously stored voice messages from the user.'),
 });
 export type AssessVoiceCheckInInput = z.infer<typeof AssessVoiceCheckInInputSchema>;

@@ -44,7 +44,7 @@ interface Props {
 }
 
 /** Optional: configure where the policy update POST should go */
-const UPDATE_POLICY_URL = "/api/emergency_contact/update_policy";
+const UPDATE_POLICY_URL = "/api/emergency-contact/update_policy";
 
 type PolicyMode = "push_then_call" | "call_immediately";
 
@@ -180,7 +180,7 @@ export function EmergencyContactSettingsDialog({
     (async () => {
       try {
         const q = query(
-          collectionGroup(db, "emergency_contact"),
+          collectionGroup(db, "emergency-contact"),
           where("emergencyContactUid", "==", emergencyContactUid)
         );
         const cg = await getDocs(q);
@@ -295,7 +295,7 @@ export function EmergencyContactSettingsDialog({
       const fullName = `${firstName.trim()} ${lastName.trim()}`.trim();
 
       const data: any = {
-        role: "emergency_contact",
+        role: "emergency-contact",
         firstName: firstName.trim(),
         lastName: lastName.trim(),
         name: fullName,
@@ -330,7 +330,7 @@ export function EmergencyContactSettingsDialog({
       // 2) Server fan-out so every place is updated
       let serverSynced = false;
       try {
-        const res = await fetch("/api/emergency_contact/sync_profile", {
+        const res = await fetch("/api/emergency-contact/sync_profile", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           credentials: "include",
@@ -355,7 +355,7 @@ export function EmergencyContactSettingsDialog({
       if (!serverSynced) {
         try {
           const qLinks = query(
-            collectionGroup(db, "emergency_contact"),
+            collectionGroup(db, "emergency-contact"),
             where("emergencyContactUid", "==", emergencyContactUid)
           );
           const linkSnap = await getDocs(qLinks);
@@ -365,7 +365,7 @@ export function EmergencyContactSettingsDialog({
 
           // Update every link doc + embedded summary on the main user
           for (const d of linkSnap.docs) {
-            const ref = d.ref; // users/{mainUserUid}/emergency_contact/{docId}
+            const ref = d.ref; // users/{mainUserUid}/emergency-contact/{docId}
             const parent = ref.parent.parent; // users/{mainUserUid}
             const mainUserUid = parent?.id;
 

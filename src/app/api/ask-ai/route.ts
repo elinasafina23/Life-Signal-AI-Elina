@@ -31,7 +31,7 @@ async function requireMainUser(req: NextRequest) {
 
   // Fetch the user document to inspect their role
   const userSnap = await db.doc(`users/${decoded.uid}`).get();
-  // Normalize any stored role string to canonical alias ("main_user" | "emergency_contact")
+  // Normalize any stored role string to canonical alias ("main_user" | "emergency-contact")
   const role = normalizeRole((userSnap.data() as any)?.role);
   // Only allow main users to hit this endpoint
   if (!isMainUserRole(role || undefined)) {

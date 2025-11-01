@@ -136,7 +136,7 @@ export async function GET(req: NextRequest) {
     const user = {
       uid: decoded.uid,
       email: decoded.email ?? null,
-      role: claims.role ?? null, // e.g. "main_user" | "emergency_contact"
+      role: claims.role ?? null, // e.g. "main_user" | "emergency-contact"
       emergencyContactUid: claims.emergencyContactUid ?? null,
     };
 

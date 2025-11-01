@@ -8,7 +8,7 @@ import { adminAuth } from "@/lib/firebaseAdmin"; // Firebase Admin SDK (server-s
 export const runtime = "nodejs"; 
 
 // Our two possible roles in this app.
-type Role = "main_user" | "emergency_contact";
+type Role = "main_user" | "emergency-contact";
 
 /** 
  * Utility: only allow safe same-origin paths for deep links.
@@ -31,12 +31,12 @@ function sanitizeDeepLink(raw: string | null | undefined): string | null {
  */
 function inferRoleFromParams(params: URLSearchParams): Role {
   const explicit = (params.get("role") || "").toLowerCase();
-  if (explicit === "emergency_contact") return "emergency_contact";
+  if (explicit === "emergency-contact") return "emergency-contact";
   if (explicit === "main_user") return "main_user";
 
-  // Fallback: if push type indicates emergency, assume emergency_contact
+  // Fallback: if push type indicates emergency, assume emergency-contact
   const type = params.get("type") || "";
-  if (type === "missed_checkin_emergency") return "emergency_contact";
+  if (type === "missed_checkin_emergency") return "emergency-contact";
 
   return "main_user";
 }
@@ -50,7 +50,7 @@ function buildDest(params: URLSearchParams, role: Role): string {
   if (deepLink) return deepLink;
 
   // 2. Otherwise default dashboards by role
-  const base = role === "emergency_contact" ? "/emergency-dashboard" : "/dashboard";
+  const base = role === "emergency-contact" ? "/emergency-dashboard" : "/dashboard";
 
   // 3. Preserve context in query string (so dashboard knows what to show)
   const keep = new URLSearchParams();
@@ -89,9 +89,9 @@ export async function GET(req: Request) {
       const decoded = await adminAuth.verifySessionCookie(sessionCookie, true);
       uid = decoded.uid;
 
-      // If we’ve set custom claims like { role: "emergency_contact" }
+      // If we’ve set custom claims like { role: "emergency-contact" }
       const claimRole = String((decoded as any).role || "").toLowerCase();
-      if (claimRole === "emergency_contact") roleFromClaims = "emergency_contact";
+      if (claimRole === "emergency-contact") roleFromClaims = "emergency-contact";
       else if (claimRole === "main_user") roleFromClaims = "main_user";
     } catch {
       uid = null; // Invalid/expired cookie → treat as logged out

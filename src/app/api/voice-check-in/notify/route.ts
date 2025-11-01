@@ -61,7 +61,7 @@ async function sendPushToTokens(
 /**
  * Fetch contacts to mirror to:
  *  - Top-level mirror (/emergencyContacts): keep `status == "ACTIVE"` (useful for push targeting or admin views)
- *  - Per-link docs   (/users/{uid}/emergency_contact/*): **ALL** link docs (no status filter) so the EC dashboard
+ *  - Per-link docs   (/users/{uid}/emergency-contact/*): **ALL** link docs (no status filter) so the EC dashboard
  *    tiles always get updated regardless of link status.
  */
 async function fetchAllContactsForMirroring(mainUserUid: string) {
@@ -71,12 +71,12 @@ async function fetchAllContactsForMirroring(mainUserUid: string) {
       .where("mainUserUid", "==", mainUserUid)
       .where("status", "==", "ACTIVE")
       .get(),
-    db.collection(`users/${mainUserUid}/emergency_contact`).get(), // ← no status filter on purpose
+    db.collection(`users/${mainUserUid}/emergency-contact`).get(), // ← no status filter on purpose
   ]);
 
   return {
     topLevelDocs: top.docs, // docs in /emergencyContacts (ACTIVE only)
-    subDocs: sub.docs, // docs in /users/{uid}/emergency_contact (ALL)
+    subDocs: sub.docs, // docs in /users/{uid}/emergency-contact (ALL)
   };
 }
 

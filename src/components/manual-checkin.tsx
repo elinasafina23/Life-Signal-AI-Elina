@@ -16,7 +16,7 @@ import {
 } from "firebase/firestore";
 
 /* ---------------- Roles ---------------- */
-import { normalizeRole } from "@/lib/roles"; // Normalizes strings to "main_user" | "emergency_contact"
+import { normalizeRole } from "@/lib/roles"; // Normalizes strings to "main_user" | "emergency-contact"
 
 /* ---------------- Types ---------------- */
 type Status = "safe" | "missed" | "unknown"; // What the dashboard currently thinks
@@ -67,7 +67,7 @@ export function ManualCheckIn({ status, onCheckedIn }: ManualCheckInProps) {
       // 3) Block EMERGENCY CONTACTS from checking in.
       //    We normalize the role to be safe against casing/undefined.
       const role = normalizeRole((data as any).role);
-      if (role === "emergency_contact") {
+      if (role === "emergency-contact") {
         throw new Error("Emergency contacts cannot perform check-ins.");
       }
 

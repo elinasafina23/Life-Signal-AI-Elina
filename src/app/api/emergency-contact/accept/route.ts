@@ -1,4 +1,4 @@
-// src/app/api/emergency_contact/accept/route.ts
+// src/app/api/emergency-contact/accept/route.ts
 
 import { NextRequest, NextResponse } from "next/server";
 import { FieldValue } from "firebase-admin/firestore";
@@ -20,7 +20,20 @@ function normalizeEmail(e?: string | null) {
   }
   return v;
 }
-
+// LINE ~20: CORS headers (dev-safe)
+const CORS_HEADERS = {
+  "Access-Control-Allow-Origin": "*",
+  "Access-Control-Allow-Methods": "OPTIONS,GET,POST",
+  "Access-Control-Allow-Headers": "Content-Type, Authorization",
+  "Access-Control-Allow-Credentials": "true",
+};
+// LINE ~30
+export async function OPTIONS() {
+  return new NextResponse(null, { status: 204, headers: CORS_HEADERS });
+}// LINE ~35: quick probe — lets you visit /api/emergency-contact/accept in the browser
+export async function GET() {
+  return NextResponse.json({ ok: true, where: "/api/emergency-contact/accept" }, { headers: CORS_HEADERS });
+}
 /**
  * Ensure the caller is signed in AND has an emergency-contact role.
  * Returns their uid (→ emergencyContactUid) and normalized email.
@@ -50,7 +63,7 @@ async function requireEmergencyContact(req: NextRequest) {
 }
 
 /**
- * POST /api/emergency_contact/accept
+ * POST /api/emergency-contact/accept
  * Accept an invite linking the signed-in emergency contact to a main user.
  *
  * Body:
@@ -58,14 +71,25 @@ async function requireEmergencyContact(req: NextRequest) {
  * - inviteId?: string    // invite doc id
  *
  * Effects:
- * - Upserts link doc at: users/{mainUserUid}/emergency_contact/{emergencyContactUid}
+ * - Upserts link doc at: users/{mainUserUid}/emergency-contact/{emergencyContactUid}
  * - Marks invite accepted
  * - Upserts a top-level summary doc (optional analytics): emergencyContacts/{mainUserUid_email}
  */
 export async function POST(req: NextRequest) {
   try {
     // Ensure caller is an emergency contact; get their identity
-    const { uid: emergencyContactUid, email: signedInEmail } = await requireEmergencyContact(req);
+    // ✅ Soft-auth: DO NOT fail if the invitee isn’t signed in yet.
+// We’ll allow the request to continue and return { requiresAuth: true } later.
+let emergencyContactUid: string | null = null;
+let signedInEmail: string | null = null;
+try {
+  const r = await requireEmergencyContact(req);
+  emergencyContactUid = r.uid;
+  signedInEmail = r.email;
+} catch {
+  // leave nulls — handled by the pre-auth branch below
+}
+
 
     // Parse request payload; support token OR inviteId
     const body = await req.json().catch(() => ({}));
@@ -77,14 +101,22 @@ export async function POST(req: NextRequest) {
     }
 
     // --- Load the invite document ---
-    let inviteRef = inviteId ? db.collection("invites").doc(inviteId) : null;
+    let inviteRef = inviteId ? db.collection("emergency_invites").doc(inviteId) : null;
     let inviteSnap = inviteRef ? await inviteRef.get() : null;
 
     // If not found by id, try finding by hashed token
     if (!inviteSnap || !inviteSnap.exists) {
       if (!token) return NextResponse.json({ error: "Invite not found" }, { status: 404 });
       const tokenHash = crypto.createHash("sha256").update(token).digest("hex");
-      const q = await db.collection("invites").where("tokenHash", "==", tokenHash).limit(1).get();
+     // look up by tokenHash (that’s what’s stored in your invite doc)
+     // We only store tokenHash in emergency_invites; never the plain token.
+
+const q = await db
+.collection("emergency_invites")
+.where("tokenHash", "==", tokenHash)
+.limit(1)
+.get();
+
       if (q.empty) return NextResponse.json({ error: "Invite not found" }, { status: 404 });
       inviteSnap = q.docs[0];
       inviteRef = inviteSnap.ref;
@@ -93,7 +125,7 @@ export async function POST(req: NextRequest) {
     const inv = inviteSnap.data() as any;
 
     // --- Validate the invite matches an emergency-contact role ---
-    if (inv.role && normalizeRole(inv.role) !== "emergency_contact") {
+    if (inv.role && normalizeRole(inv.role) !== "emergency-contact") {
       return NextResponse.json({ error: "Invite role mismatch" }, { status: 400 });
     }
 
@@ -112,22 +144,44 @@ export async function POST(req: NextRequest) {
     }
 
     // --- Validate recipient email matches the signed-in contact ---
-    const invitedEmail = normalizeEmail(inv.emergencyContactEmail);
+// NOTE: Some invites were written with "recipientEmail". We fall back to that so older docs work.
+// Accept any of the known field names used by the invite creator
+const invitedEmail = normalizeEmail(
+  inv.emergencyContactEmail || inv.recipientEmail || inv.email
+); // <-- minimal fix
+
     if (!invitedEmail) {
       return NextResponse.json({ error: "Invite missing recipient email" }, { status: 400 });
     }
-    if (invitedEmail !== signedInEmail) {
+    // ✅ Only enforce after sign-in (pre-auth already returned above)
+    if (signedInEmail && invitedEmail !== signedInEmail) {
       return NextResponse.json(
         { error: "Signed-in email does not match invite recipient" },
         { status: 409 }
       );
     }
+    
 
     // --- Identify the main user being linked to ---
-    const mainUserUid: string = inv.mainUserId; // invite schema used mainUserUid previously
+    const mainUserUid: string = inv.mainUserUid || inv.mainUserId; // handle both schema variants
+    // NOTE: Invites may store main user as mainUserUid or mainUserId; support both.
+    // invite schema used mainUserUid previously
     if (!mainUserUid) {
       return NextResponse.json({ error: "Invite missing main user id" }, { status: 400 });
     }
+// ---------- Phase 1 (not signed in yet): tell client to go to signup ----------
+if (!emergencyContactUid) {
+  return NextResponse.json({
+    ok: true,
+    requiresAuth: true,              // 👈 your page should redirect to /signup when this is true
+    inviteId: inviteRef!.id,
+    mainUser: {
+      uid: mainUserUid,
+      name: inv.mainUserName || "",
+      avatar: inv.mainUserAvatar || "",
+    },
+  });
+}
 
     // --- Optional display fields (for dashboard cards) ---
     let mainUserName = inv.mainUserName || "";
@@ -145,7 +199,7 @@ export async function POST(req: NextRequest) {
 
     // --- Prepare references we will write ---
     // Link doc lives under the main user's doc; id = emergencyContactUid (simple & unique)
-    const linkRef = db.doc(`users/${mainUserUid}/emergency_contact/${emergencyContactUid}`);
+    const linkRef = db.doc(`users/${mainUserUid}/emergency-contact/${emergencyContactUid}`);
 
     // Optional top-level join/analytics doc (handy for admin/queries)
     const emergencyContactId = `${mainUserUid}_${invitedEmail}`;

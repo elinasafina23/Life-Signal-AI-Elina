@@ -8,7 +8,7 @@ export const ROUTES = {
   
   export const API = {
     setSession: "/api/auth/session",
-    acceptEmergencyInvite: "/api/emergency_contact/accept",
+    acceptEmergencyInvite: "/api/emergency-contact/accept",
   } as const;
   
   export const QP = {

@@ -4,7 +4,7 @@
  * Canonical roles used across the app.
  * Keep this list as the single source of truth.
  */
-export const ROLES = ['main_user', 'emergency_contact'] as const;
+export const ROLES = ['main_user', 'emergency-contact'] as const;
 
 /**
  * TypeScript union type of the canonical roles above.
@@ -25,17 +25,19 @@ const alias: Record<string, Role> = {
   mainUser: 'main_user',
 
   // Emergency contact
-  emergency_contact: 'emergency_contact',
-  'emergency-contact': 'emergency_contact',
-  'emergency contact': 'emergency_contact',
-  caregiver: 'emergency_contact',
-  carer: 'emergency_contact',
-  contact: 'emergency_contact',
+  // ✅ **FIX:** Added 'emergency_contact' to the alias table.
+  // The normalizeRole function converts hyphens to underscores, so this key is required.
+  emergency_contact: 'emergency-contact',
+  'emergency-contact': 'emergency-contact',
+  'emergency contact': 'emergency-contact',
+  caregiver: 'emergency-contact',
+  carer: 'emergency-contact',
+  contact: 'emergency-contact',
 };
 
 /**
  * Normalize an arbitrary string into a canonical Role.
- * - Returns 'main_user' | 'emergency_contact' for known inputs
+ * - Returns 'main_user' | 'emergency-contact' for known inputs
  * - Returns null for unknown/empty inputs
  *
  * We:
@@ -58,4 +60,4 @@ export const isMainUserRole = (r?: string | null) =>
   normalizeRole(r) === 'main_user';
 
 export const isEmergencyContactRole = (r?: string | null) =>
-  normalizeRole(r) === 'emergency_contact';
+  normalizeRole(r) === 'emergency-contact';

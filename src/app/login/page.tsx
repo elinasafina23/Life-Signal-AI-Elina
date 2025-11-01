@@ -42,7 +42,7 @@ const loginSchema = z.object({
 const EMERGENCY_DASH = "/emergency-dashboard";
 const MAIN_DASH = "/dashboard";
 const SET_SESSION_API = "/api/auth/session";
-const ACCEPT_INVITE_API = "/api/emergency_contact/accept";
+const ACCEPT_INVITE_API = "/api/emergency-contact/accept";
 
 /**
  * safeNext: sanitize a provided "next" path.
@@ -52,11 +52,11 @@ const ACCEPT_INVITE_API = "/api/emergency_contact/accept";
 function safeNext(n: string | null | undefined, fallbackRole: Role): string {
   if (n && n.startsWith("/")) {
     // Normalize "/" → use role-based default instead of pushing to site root.
-    if (n === "/") return fallbackRole === "emergency_contact" ? EMERGENCY_DASH : MAIN_DASH;
+    if (n === "/") return fallbackRole === "emergency-contact" ? EMERGENCY_DASH : MAIN_DASH;
     return n;
   }
   // No acceptable next given → default by role.
-  return fallbackRole === "emergency_contact" ? EMERGENCY_DASH : MAIN_DASH;
+  return fallbackRole === "emergency-contact" ? EMERGENCY_DASH : MAIN_DASH;
 }
 
 /**
@@ -111,7 +111,7 @@ function LoginPageContent() {
   const [isSubmitting, setIsSubmitting] = useState(false); // Disable UI during submit.
   const [showPassword, setShowPassword] = useState(false); // Toggle password visibility.
 
-  // Role hint from the URL; strictly limited to "main_user" | "emergency_contact".
+  // Role hint from the URL; strictly limited to "main_user" | "emergency-contact".
   const roleFromUrl: Role = normalizeRole(params.get("role")) ?? "main_user";
 
   // Optional invite token for emergency-contact flows.
@@ -228,7 +228,7 @@ function LoginPageContent() {
           <CardHeader className="text-center">
             <CardTitle className="text-3xl font-headline">Welcome Back!</CardTitle>
             <CardDescription>
-              {roleFromUrl === "emergency_contact"
+              {roleFromUrl === "emergency-contact"
                 ? "Sign in as an emergency contact"
                 : "Sign in to continue to LifeSignal AI"}
             </CardDescription>

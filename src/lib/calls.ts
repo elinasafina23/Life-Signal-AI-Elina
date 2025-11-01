@@ -48,7 +48,7 @@ export async function acceptEmergencyInvite(
     throw new Error("Provide an invite token or inviteId.");
   }
 
-  const res = await fetch("/api/emergency_contact/accept", {
+  const res = await fetch("/api/emergency-contact/accept", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     credentials: "include",         // include __session cookie

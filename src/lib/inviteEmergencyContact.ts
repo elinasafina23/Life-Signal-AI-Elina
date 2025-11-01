@@ -79,7 +79,7 @@ export async function inviteEmergencyContact(
       ...(sanitizedPhone ? { phone: sanitizedPhone } : {}),
     };
 
-    const res = await fetch("/api/emergency_contact/invite", {
+    const res = await fetch("/api/emergency-contact/invite", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       credentials: "include",

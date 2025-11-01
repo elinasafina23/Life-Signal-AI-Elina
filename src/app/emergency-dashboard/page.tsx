@@ -320,7 +320,7 @@ export default function EmergencyDashboardPage() {
       if (!user) {
         setLoading(false);
         router.replace(
-          `/login?role=emergency_contact&next=${encodeURIComponent(
+          `/login?role=emergency-contact&next=${encodeURIComponent(
             "/emergency-dashboard",
           )}`,
         );
@@ -333,13 +333,13 @@ export default function EmergencyDashboardPage() {
         const myRole = normalizeRole(
           meSnap.exists() ? (meSnap.data() as any).role : undefined,
         );
-        if (myRole !== "emergency_contact") {
+        if (myRole !== "emergency-contact") {
           router.replace("/dashboard");
           return;
         }
       } catch {
         router.replace(
-          `/login?role=emergency_contact&next=${encodeURIComponent(
+          `/login?role=emergency-contact&next=${encodeURIComponent(
             "/emergency-dashboard",
           )}`,
         );
@@ -349,9 +349,9 @@ export default function EmergencyDashboardPage() {
       setEmergencyContactUid(user.uid);
       setLoading(false);
 
-      // users/{mainUserUid}/emergency_contact/{linkDoc} where emergencyContactUid == current user.uid
+      // users/{mainUserUid}/emergency-contact/{linkDoc} where emergencyContactUid == current user.uid
       const linksByEmergencyContactUid = query(
-        collectionGroup(db, "emergency_contact"),
+        collectionGroup(db, "emergency-contact"),
         where("emergencyContactUid", "==", user.uid),
       );
 
@@ -369,7 +369,7 @@ export default function EmergencyDashboardPage() {
             const liveLinkKeys = new Set<string>();
 
             linksSnap.forEach((linkDoc) => {
-              // users/{MAIN_UID}/emergency_contact/{...}
+              // users/{MAIN_UID}/emergency-contact/{...}
               const mainUserUid = linkDoc.ref.parent.parent?.id;
               if (!mainUserUid) return;
 

@@ -383,7 +383,7 @@ export default function DashboardPage() {
         // Role gate
         setRoleChecked(true);
         const r = normalizeRole(data.role);
-        if (r === "emergency_contact") {
+        if (r === "emergency-contact") {
           router.replace(EMERGENCY_DASH);
           return;
         }
