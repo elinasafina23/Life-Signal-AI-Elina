@@ -9,6 +9,7 @@ import { auth, db } from "@/firebase";
 
 // Firestore
 import {
+  collection,
   collectionGroup,
   onSnapshot,
   query,
@@ -16,6 +17,7 @@ import {
   doc,
   getDoc,
   Timestamp,
+  documentId,
   type Unsubscribe,
   type Query as FsQuery,
   type QuerySnapshot,
@@ -202,6 +204,22 @@ function getMapImage(location?: string) {
   return { src: url, alt: `Map of ${location}` } as const;
 }
 
+function chunkArray<T>(arr: T[], size: number): T[][] {
+  if (size <= 0) return [];
+  const chunks: T[][] = [];
+  for (let i = 0; i < arr.length; i += size) {
+    chunks.push(arr.slice(i, i + size));
+  }
+  return chunks;
+}
+
+function arraysEqual<T>(a: T[] | undefined, b: T[] | undefined) {
+  if (a === b) return true;
+  if (!a || !b) return false;
+  if (a.length !== b.length) return false;
+  return a.every((value, index) => value === b[index]);
+}
+
 /* ---------------------- Page ---------------------- */
 export default function EmergencyDashboardPage() {
   const router = useRouter();
@@ -327,19 +345,25 @@ export default function EmergencyDashboardPage() {
       }
     >
   >({});
+  const fallbackLinkChunksRef = useRef<Record<string, string[]>>({});
 
   useEffect(() => {
     const LINKS_KEY = "links";
+    const FALLBACK_PREFIX = "fallback:";
+    let cancelled = false;
+    let activeUid: string | null = null;
 
     const unsubAuth = onAuthStateChanged(auth, async (user) => {
       // clean up any previous listeners
       Object.values(unsubsRef.current).forEach((fn) => fn());
       unsubsRef.current = {};
       linkStateRef.current = {};
+      fallbackLinkChunksRef.current = {};
       setMainUsers([]);
       setEmergencyContactUid(null);
 
       if (!user) {
+        activeUid = null;
         setLoading(false);
         router.replace(
           `/login?role=emergency_contact&next=${encodeURIComponent(
@@ -370,10 +394,11 @@ export default function EmergencyDashboardPage() {
 
       setEmergencyContactUid(user.uid);
       setLoading(false);
+      activeUid = user.uid;
 
-      // users/{mainUserUid}/emergency-contact/{linkDoc} where emergencyContactUid == current user.uid
+      // users/{mainUserUid}/emergency_contact/{linkDoc} filtered by canonical field
       const linksByEmergencyContactUid = query(
-        collectionGroup(db, "emergency-contact"),
+        collectionGroup(db, "emergency_contact"),
         where("emergencyContactUid", "==", user.uid),
       );
 
@@ -383,8 +408,12 @@ export default function EmergencyDashboardPage() {
           (linksSnap: QuerySnapshot<DocumentData>) => {
             // gather all main user IDs referenced by the link snapshot(s)
             const nextMainUserIds = new Set<string>(
-              Object.keys(unsubsRef.current)
-                .filter((k) => k !== LINKS_KEY && !k.startsWith("link:")),
+              Object.keys(unsubsRef.current).filter(
+                (k) =>
+                  k !== LINKS_KEY &&
+                  !k.startsWith("link:") &&
+                  !k.startsWith(FALLBACK_PREFIX),
+              ),
             );
 
             // track all link keys we still need after this tick
@@ -475,6 +504,7 @@ export default function EmergencyDashboardPage() {
             Object.keys(unsubsRef.current).forEach((k) => {
               if (k === LINKS_KEY) return;
               if (k.startsWith("link:")) return; // handled below
+              if (k.startsWith(FALLBACK_PREFIX)) return; // managed via summary chunks
               if (!nextMainUserIds.has(k)) {
                 unsubsRef.current[k](); // unsubscribe
                 delete unsubsRef.current[k];
@@ -706,7 +736,10 @@ export default function EmergencyDashboardPage() {
             setMainUsers((prev) => {
               const valid = new Set(
                 Object.keys(unsubsRef.current).filter(
-                  (k) => k !== LINKS_KEY && !k.startsWith("link:"),
+                  (k) =>
+                    k !== LINKS_KEY &&
+                    !k.startsWith("link:") &&
+                    !k.startsWith(FALLBACK_PREFIX),
                 ),
               );
               return prev.filter((u) => valid.has(u.mainUserUid));
@@ -719,14 +752,110 @@ export default function EmergencyDashboardPage() {
         linksByEmergencyContactUid as FsQuery<DocumentData>,
         LINKS_KEY,
       );
+
+      async function refreshLegacyFallbacks(emergencyUid: string) {
+        try {
+          const res = await fetch("/api/emergency_contact/legacy-links", {
+            credentials: "include",
+          });
+          const body = (await res.json().catch(() => ({}))) as {
+            mainUserUids?: unknown;
+            error?: unknown;
+          };
+
+          if (!res.ok) {
+            const message =
+              typeof body?.error === "string"
+                ? body.error
+                : `Failed to load legacy links (${res.status})`;
+            throw new Error(message);
+          }
+
+          if (cancelled || activeUid !== emergencyUid) return;
+
+          const fallbackMainUserIds = Array.isArray(body?.mainUserUids)
+            ? (body.mainUserUids
+                .map((raw) =>
+                  typeof raw === "string" ? raw.trim() : "",
+                )
+                .filter(Boolean) as string[])
+            : [];
+
+          const fallbackPaths = fallbackMainUserIds.map(
+            (mainUserUid) =>
+              `users/${mainUserUid}/emergency_contact/${emergencyUid}`,
+          );
+
+          const chunks = chunkArray(fallbackPaths, 10);
+          const nextChunkMap: Record<string, string[]> = {};
+
+          chunks.forEach((paths, index) => {
+            if (!paths.length) return;
+            const key = `${FALLBACK_PREFIX}${index}`;
+            nextChunkMap[key] = paths;
+          });
+
+          const previous = fallbackLinkChunksRef.current;
+
+          Object.keys(previous).forEach((key) => {
+            if (!nextChunkMap[key]) {
+              if (unsubsRef.current[key]) {
+                unsubsRef.current[key]!();
+                delete unsubsRef.current[key];
+              }
+            }
+          });
+
+          Object.entries(nextChunkMap).forEach(([key, paths]) => {
+            const prevPaths = previous[key];
+            if (arraysEqual(prevPaths, paths)) return;
+
+            if (unsubsRef.current[key]) {
+              unsubsRef.current[key]!();
+              delete unsubsRef.current[key];
+            }
+
+            const fallbackQuery = query(
+              collectionGroup(db, "emergency_contact"),
+              where(documentId(), "in", paths),
+            );
+
+            wireLinksListener(fallbackQuery as FsQuery<DocumentData>, key);
+          });
+
+          fallbackLinkChunksRef.current = nextChunkMap;
+        } catch (error) {
+          if (cancelled || activeUid !== emergencyUid) {
+            return;
+          }
+          console.warn(
+            "[Emergency Dashboard] Legacy emergency_contact lookup failed",
+            error,
+          );
+
+          const previous = fallbackLinkChunksRef.current;
+          Object.keys(previous).forEach((key) => {
+            if (unsubsRef.current[key]) {
+              unsubsRef.current[key]!();
+              delete unsubsRef.current[key];
+            }
+          });
+          fallbackLinkChunksRef.current = {};
+        }
+      }
+
+      void refreshLegacyFallbacks(user.uid);
     });
 
     return () => {
+      cancelled = true;
       // cleanup on unmount
       unsubAuth();
       Object.values(unsubsRef.current).forEach((fn) => fn());
       unsubsRef.current = {};
       linkStateRef.current = {};
+      fallbackLinkChunksRef.current = {};
+      activeUid = null;
     };
   }, [router]);
 
