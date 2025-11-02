@@ -154,12 +154,14 @@ const invitedEmail = normalizeEmail(
       return NextResponse.json({ error: "Invite missing recipient email" }, { status: 400 });
     }
     // ✅ Only enforce after sign-in (pre-auth already returned above)
+    /*
     if (signedInEmail && invitedEmail !== signedInEmail) {
       return NextResponse.json(
         { error: "Signed-in email does not match invite recipient" },
         { status: 409 }
       );
     }
+    */
     
 
     // --- Identify the main user being linked to ---

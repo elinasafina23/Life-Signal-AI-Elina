@@ -63,19 +63,21 @@ import { normalizeRole } from "@/lib/roles";
 import { sanitizePhone } from "@/lib/phone";
 
 /* ---------------------- Types ---------------------- */
+// NOTE: Status values are used only for badge visuals
 export type Status = "OK" | "Inactive" | "SOS";
 
+// The **view model** the dashboard expects for each main user card
 export type MainUserCard = {
   mainUserUid: string;
   name: string;
   avatar?: string;
   initials: string;
   status?: Status;
-  lastCheckIn?: string;
-  location?: string; // address or "lat,lng"
+  lastCheckIn?: string; // already formatted for UI; source: users/{uid}.lastCheckinAt
+  location?: string; // address or "lat,lng" string (only when shared)
   locationShareReason?: "sos" | "escalation" | null;
   locationSharedAt?: Date | null;
-  locationSharing?: boolean;
+  locationSharing?: boolean; // whether user opted in globally
   colorClass: string;
   phone?: string | null;
   latestVoiceMessage?: {
@@ -85,7 +87,7 @@ export type MainUserCard = {
     createdAt: Date | null;
     audioUrl?: string | null;
   } | null;
-  // NEW: mood summary shown on the emergency dashboard
+  // From /api/ask-ai summarization (optional)
   moodSummary?: {
     mood: string;
     description?: string;
@@ -93,19 +95,20 @@ export type MainUserCard = {
   } | null;
 };
 
+// Firestore **profile** shape (users/{mainUserUid})
 export type MainUserDoc = {
   firstName?: string;
   lastName?: string;
   avatar?: string;
-  lastCheckinAt?: Timestamp;
+  lastCheckinAt?: Timestamp; // NOTE: your DB uses "lastCheckinAt" (not camel N)
   checkinInterval?: number | string;
   sosTriggeredAt?: Timestamp;
-  location?: string; // address or "lat,lng"
+  location?: string;
   locationShareReason?: "sos" | "escalation" | null;
   locationSharedAt?: Timestamp;
   locationSharing?: boolean;
   role?: string;
-  dueAtMin?: number; // materialized next deadline (minutes since epoch)
+  dueAtMin?: number;
   phone?: string;
   latestVoiceMessage?: {
     transcript?: string;
@@ -115,7 +118,6 @@ export type MainUserDoc = {
     audioDataUrl?: string;
     audioUrl?: string;
   };
-  // NEW: persisted mood summary written by /api/ask-ai
   latestMoodAssessment?: {
     mood?: string;
     description?: string;
@@ -125,6 +127,7 @@ export type MainUserDoc = {
 };
 
 /* ---------------------- Helpers ---------------------- */
+
 const userColors = [
   "bg-red-200",
   "bg-blue-200",
@@ -138,6 +141,7 @@ function initialsAndColor(name = "") {
   const initials =
     name
       .split(" ")
+      .filter(Boolean)
       .map((p) => p[0])
       .join("")
       .slice(0, 2)
@@ -163,6 +167,7 @@ function getStatusVariant(status?: string) {
   }
 }
 
+// NOTE: UI-friendly format; safe for null/undefined
 function formatWhen(d?: Date | null) {
   if (!d) return "—";
   const now = new Date();
@@ -170,6 +175,7 @@ function formatWhen(d?: Date | null) {
     d.getFullYear() === now.getFullYear() &&
     d.getMonth() === now.getMonth() &&
     d.getDate() === now.getDate();
+
   const y = new Date(now);
   y.setDate(now.getDate() - 1);
   const isYesterday =
@@ -183,6 +189,7 @@ function formatWhen(d?: Date | null) {
   return `${d.toLocaleDateString()} ${time}`;
 }
 
+// STATIC MAP helper; gracefully falls back without breaking SSR
 function getMapImage(location?: string) {
   const FALLBACK = {
     src: "/images/map-fallback-600x300.png",
@@ -201,6 +208,7 @@ function getMapImage(location?: string) {
 }
 
 /* ---------------------- Page ---------------------- */
+
 export default function EmergencyDashboardPage() {
   const router = useRouter();
   const { toast } = useToast();
@@ -208,20 +216,21 @@ export default function EmergencyDashboardPage() {
   const [mainUsers, setMainUsers] = useState<MainUserCard[]>([]);
   const [loading, setLoading] = useState(true);
 
-  // Canonical contact id
+  // Canonical contact id (the **signed-in EC**)
   const [emergencyContactUid, setEmergencyContactUid] = useState<string | null>(
     null,
   );
 
-  // centered popup when location is missing
+  // Centered popup when location is missing
   const [noLocationUser, setNoLocationUser] = useState<MainUserCard | null>(
     null,
   );
 
-  // audio playback state for recorded voice messages
+  // Audio playback state + refs
   const audioRefs = useRef<Record<string, HTMLAudioElement | null>>({});
   const [playingUid, setPlayingUid] = useState<string | null>(null);
 
+  // Ensure audio listeners are cleaned up on unmount
   useEffect(() => {
     return () => {
       Object.values(audioRefs.current).forEach((audio) => {
@@ -267,6 +276,7 @@ export default function EmergencyDashboardPage() {
       return;
     }
 
+    // Stop any currently playing audio from another card
     if (playingUid && playingUid !== uid) {
       const current = audioRefs.current[playingUid];
       try {
@@ -275,6 +285,7 @@ export default function EmergencyDashboardPage() {
       } catch {}
     }
 
+    // Toggle
     if (playingUid === uid && !audioEl.paused) {
       audioEl.pause();
       audioEl.currentTime = 0;
@@ -298,19 +309,20 @@ export default function EmergencyDashboardPage() {
     }
   }
 
-  // keep all active unsubscribers here
+  // Keep all active unsubscribers here (keyed by mainUserUid, plus "links" and "link:<uid>")
   const unsubsRef = useRef<Record<string, Unsubscribe>>({});
 
-  // NEW: keep per-link data (the per-contact lastVoiceMessage)
+  // Per-link state overrides (e.g., lastVoiceMessage scoped to the EC link doc)
   const linkStateRef = useRef<
     Record<string, { lastVoiceMessage?: any | null }>
   >({});
 
   useEffect(() => {
+    // SINGLE SOURCE OF TRUTH for the links listener key
     const LINKS_KEY = "links";
 
     const unsubAuth = onAuthStateChanged(auth, async (user) => {
-      // clean up any previous listeners
+      // ---- Reset previous listeners/state on auth changes
       Object.values(unsubsRef.current).forEach((fn) => fn());
       unsubsRef.current = {};
       linkStateRef.current = {};
@@ -327,13 +339,14 @@ export default function EmergencyDashboardPage() {
         return;
       }
 
-      // gate by role using your users/{uid}.role
+      // ---- Gate by role using users/{uid}.role
       try {
         const meSnap = await getDoc(doc(db, "users", user.uid));
         const myRole = normalizeRole(
           meSnap.exists() ? (meSnap.data() as any).role : undefined,
         );
         if (myRole !== "emergency-contact") {
+          // Teaching note: ECs should not access main dashboard
           router.replace("/dashboard");
           return;
         }
@@ -349,7 +362,8 @@ export default function EmergencyDashboardPage() {
       setEmergencyContactUid(user.uid);
       setLoading(false);
 
-      // users/{mainUserUid}/emergency-contact/{linkDoc} where emergencyContactUid == current user.uid
+      // ---- Listen to **link docs** where emergencyContactUid == current EC
+      // NOTE: name matches your DB: subcollection id is "emergency-contact"
       const linksByEmergencyContactUid = query(
         collectionGroup(db, "emergency-contact"),
         where("emergencyContactUid", "==", user.uid),
@@ -359,23 +373,23 @@ export default function EmergencyDashboardPage() {
         unsubsRef.current[key] = onSnapshot(
           q,
           (linksSnap: QuerySnapshot<DocumentData>) => {
-            // gather all main user IDs referenced by the link snapshot(s)
+            // Build the set of main user IDs we should keep listeners for
             const nextMainUserIds = new Set<string>(
               Object.keys(unsubsRef.current)
                 .filter((k) => k !== LINKS_KEY && !k.startsWith("link:")),
             );
 
-            // track all link keys we still need after this tick
+            // Track which link listeners remain live after this tick
             const liveLinkKeys = new Set<string>();
 
             linksSnap.forEach((linkDoc) => {
-              // users/{MAIN_UID}/emergency-contact/{...}
+              // Each result: users/{MAIN_UID}/emergency-contact/{link}
               const mainUserUid = linkDoc.ref.parent.parent?.id;
               if (!mainUserUid) return;
 
               nextMainUserIds.add(mainUserUid);
 
-              // set up a per-link listener so we can read lastVoiceMessage
+              // Set up a per-link listener so we can read per-contact overrides
               const linkKey = `link:${mainUserUid}`;
               liveLinkKeys.add(linkKey);
 
@@ -385,7 +399,7 @@ export default function EmergencyDashboardPage() {
                   linkStateRef.current[mainUserUid] = {
                     lastVoiceMessage: d?.lastVoiceMessage ?? null,
                   };
-                  // trigger refresh of the card that uses this mainUserUid
+                  // Trigger refresh of that card
                   setMainUsers((prev) =>
                     prev.map((u) =>
                       u.mainUserUid === mainUserUid ? { ...u } : u,
@@ -395,17 +409,17 @@ export default function EmergencyDashboardPage() {
               }
             });
 
-            // remove listeners for unlinked users (user doc listeners)
+            // Remove listeners for user docs that are no longer linked
             Object.keys(unsubsRef.current).forEach((k) => {
               if (k === LINKS_KEY) return;
-              if (k.startsWith("link:")) return; // handled below
+              if (k.startsWith("link:")) return;
               if (!nextMainUserIds.has(k)) {
                 unsubsRef.current[k](); // unsubscribe
                 delete unsubsRef.current[k];
               }
             });
 
-            // remove link listeners whose main user is no longer present
+            // Remove stale link listeners
             Object.keys(unsubsRef.current).forEach((k) => {
               if (!k.startsWith("link:")) return;
               if (!liveLinkKeys.has(k)) {
@@ -416,13 +430,9 @@ export default function EmergencyDashboardPage() {
               }
             });
 
-            // ensure we are listening to each linked main user doc
+            // Ensure we are listening to each linked main user profile doc
             nextMainUserIds.forEach((mainUserId) => {
-              if (
-                unsubsRef.current[mainUserId] &&
-                typeof unsubsRef.current[mainUserId] === "function"
-              )
-                return;
+              if (unsubsRef.current[mainUserId]) return;
 
               const userDocRef = doc(db, "users", mainUserId);
               unsubsRef.current[mainUserId] = onSnapshot(
@@ -431,27 +441,30 @@ export default function EmergencyDashboardPage() {
                   const userData =
                     (userDocSnap.data() as MainUserDoc) || undefined;
 
-                  const name =
+                  // ----------- PROFILE → VIEW MODEL MAPPING -----------
+                  // Prefer "First L." for compact display; full name as fallback
+                  const fullName =
                     `${userData?.firstName || ""} ${
                       userData?.lastName || ""
                     }`.trim() || "Main User";
                   const displayName = `${userData?.firstName || ""} ${
                     userData?.lastName?.[0] || ""
                   }`.trim();
-                  const { initials, colorClass } = initialsAndColor(name);
+                  const { initials, colorClass } = initialsAndColor(fullName);
 
                   const last =
                     userData?.lastCheckinAt instanceof Timestamp
                       ? userData.lastCheckinAt.toDate()
                       : undefined;
 
+                  // Interval is either a number or string; default = 12h
                   const rawInt = userData?.checkinInterval;
                   const intervalMin =
                     typeof rawInt === "number"
                       ? rawInt
                       : parseInt(String(rawInt ?? ""), 10) || 12 * 60;
 
-                  // prefer dueAtMin from backend if present
+                  // Prefer materialized dueAtMin (set by backend) for status calc
                   const dueAtMin = Number((userData as any)?.dueAtMin);
                   const nowMin = Math.floor(Date.now() / 60000);
 
@@ -467,6 +480,7 @@ export default function EmergencyDashboardPage() {
                     status = "Inactive";
                   }
 
+                  // Location sharing is only surfaced when reason is 'sos'/'escalation'
                   const shareReason =
                     userData?.locationShareReason === "sos" ||
                     userData?.locationShareReason === "escalation"
@@ -485,16 +499,17 @@ export default function EmergencyDashboardPage() {
 
                   const locationString = shareReason
                     ? userData?.location || ""
-                    : "";
+                    : ""; // gate map by active share reason
 
                   const sanitizedPhone = sanitizePhone(
                     (userData as any)?.phone,
                   );
 
-                  // Prefer the per-contact (link) message; fall back to global latest
+                  // Prefer **per-contact** voice message override from link doc
                   const linkVmRaw =
                     linkStateRef.current[mainUserId]?.lastVoiceMessage;
-                  const sourceVm = linkVmRaw ?? (userData as any)?.latestVoiceMessage;
+                  const sourceVm =
+                    linkVmRaw ?? (userData as any)?.latestVoiceMessage;
 
                   let latestVoiceMessage = sourceVm
                     ? {
@@ -509,9 +524,10 @@ export default function EmergencyDashboardPage() {
                         anomalyDetected: Boolean(sourceVm?.anomalyDetected),
                         createdAt:
                           sourceVm?.createdAt &&
-                          typeof sourceVm.createdAt.toDate === "function"
+                          typeof sourceVm.createdAt?.toDate === "function"
                             ? sourceVm.createdAt.toDate()
                             : null,
+                        // Support both audioDataUrl and audioUrl
                         audioUrl:
                           typeof sourceVm?.audioDataUrl === "string" &&
                           sourceVm.audioDataUrl.trim()
@@ -523,6 +539,7 @@ export default function EmergencyDashboardPage() {
                       }
                     : null;
 
+                  // Drop empty shells (prevents UI noise)
                   if (
                     latestVoiceMessage &&
                     !latestVoiceMessage.transcript &&
@@ -532,7 +549,7 @@ export default function EmergencyDashboardPage() {
                     latestVoiceMessage = null;
                   }
 
-                  // ---- Mood summary (from /api/ask-ai) ----
+                  // Mood summary (optional)
                   const rawMood = (userData as any)?.latestMoodAssessment;
                   const moodSummary =
                     rawMood &&
@@ -546,7 +563,7 @@ export default function EmergencyDashboardPage() {
                               : undefined,
                           updatedAt:
                             rawMood?.updatedAt &&
-                            typeof rawMood.updatedAt.toDate === "function"
+                            typeof rawMood.updatedAt?.toDate === "function"
                               ? rawMood.updatedAt.toDate()
                               : null,
                         }
@@ -554,7 +571,8 @@ export default function EmergencyDashboardPage() {
 
                   const updatedCard: MainUserCard = {
                     mainUserUid: mainUserId,
-                    name: displayName || name,
+                    // Display "First L." if available; otherwise full name
+                    name: displayName || fullName,
                     avatar: userData?.avatar,
                     initials,
                     colorClass,
@@ -569,6 +587,7 @@ export default function EmergencyDashboardPage() {
                     moodSummary,
                   };
 
+                  // Stable replace-by-id + sort by name
                   setMainUsers((prev) => {
                     const map = new Map(prev.map((u) => [u.mainUserUid, u]));
                     map.set(mainUserId, updatedCard);
@@ -578,6 +597,7 @@ export default function EmergencyDashboardPage() {
                   });
                 },
                 (error) => {
+                  // Defensive: render a card that indicates failure (no crash)
                   console.error(
                     `[Emergency Dashboard] User doc listen failed for ${mainUserId}:`,
                     error,
@@ -601,7 +621,7 @@ export default function EmergencyDashboardPage() {
               );
             });
 
-            // drop any cards that are no longer linked
+            // Drop any cards that are no longer linked
             setMainUsers((prev) => {
               const valid = new Set(
                 Object.keys(unsubsRef.current).filter(
@@ -620,8 +640,8 @@ export default function EmergencyDashboardPage() {
       );
     });
 
+    // Global cleanup on component unmount
     return () => {
-      // cleanup on unmount
       unsubAuth();
       Object.values(unsubsRef.current).forEach((fn) => fn());
       unsubsRef.current = {};
@@ -629,11 +649,13 @@ export default function EmergencyDashboardPage() {
     };
   }, [router]);
 
-  // ensure this contact device is registered to receive pushes
+  // Register this EC device for push notifications (topic: "emergency")
   useEffect(() => {
     if (!emergencyContactUid) return;
-    registerDevice(emergencyContactUid, "emergency"); // keep your signature
+    registerDevice(emergencyContactUid, "emergency");
   }, [emergencyContactUid]);
+
+  const { toast: _t } = useToast(); // (kept for parity; you already use toast above)
 
   const handleAcknowledge = (userName: string) => {
     toast({
@@ -642,7 +664,7 @@ export default function EmergencyDashboardPage() {
     });
   };
 
-  // Open Google Maps if we have a location; otherwise show centered popup.
+  // Open Google Maps if we have a live location; otherwise show centered popup
   const handleViewOnMap = (user: MainUserCard) => {
     const loc = (user.location || "").trim();
     if (!loc || !user.locationShareReason) {

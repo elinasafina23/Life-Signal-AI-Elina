@@ -1,10 +1,112 @@
-// WARNING: Test mode allows anyone to read/write your database
-// Use only for development
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
-    match /{document=**} {
-      allow read, write: if true;
+
+    //* ---------- Auth helpers ---------- */
+
+    // Signed-in?
+    function authed() { return request.auth != null; }
+
+    // Is this the caller’s own uid?
+    function isOwner(uid) { return authed() && request.auth.uid == uid; }
+
+    // Is the caller an emergency contact linked to this main user?
+    // Assumes link doc id == emergencyContactUid (the contact’s uid).
+    function isEmergencyContactFor(mainUserUid) {
+      return authed() &&
+        exists(/databases/$(database)/documents/users/$(mainUserUid)/emergency-contact/$(request.auth.uid));
     }
+
+    //* ---------- Link docs: users/{mainUserUid}/emergency-contact/{emergencyContactUid} ---------- */
+    match /users/{mainUserUid}/emergency-contact/{emergencyContactUid} {
+      // Read a single link if:
+      //  - the doc id equals the signed-in user, OR
+      //  - the doc field emergencyContactUid equals the signed-in user, OR
+      //  - the owner (main user) is reading.
+      allow get: if authed() && (
+        emergencyContactUid == request.auth.uid ||
+        (resource.data.emergencyContactUid != null && resource.data.emergencyContactUid == request.auth.uid) ||
+        isOwner(mainUserUid)
+      );
+
+      // Query link docs under a specific main user with the same permissions.
+      // NOTE: during list, resource is not available, so rely on path vars.
+      allow list: if authed() && (
+        isOwner(mainUserUid) ||
+        emergencyContactUid == request.auth.uid
+      );
+
+      // Link creation/updates are done by server/Admin (invites/accept flow), not clients.
+      allow create, update, delete: if false;
+    }
+
+    //* ---------- REQUIRED for collectionGroup('emergency-contact') queries ---------- */
+    match /{path=**}/emergency-contact/{emergencyContactUid} {
+      // Allow querying only the docs where the caller is the contact.
+      // NOTE: during list, resource is not available; use path var.
+      allow list: if authed() && emergencyContactUid == request.auth.uid;
+
+      // Direct gets can also verify the field if present.
+      allow get: if authed() && (
+        emergencyContactUid == request.auth.uid ||
+        (resource.data.emergencyContactUid != null && resource.data.emergencyContactUid == request.auth.uid)
+      );
+    }
+
+    //* ---------- User profiles: users/{uid} ---------- */
+    match /users/{uid} {
+      // Owners can read their own profile; linked emergency contacts can read too.
+      allow read: if isOwner(uid) || isEmergencyContactFor(uid);
+
+      // Only the owner can create/update their profile.
+      allow create, update: if isOwner(uid);
+
+      // Device tokens: owners register their own devices.
+      match /devices/{deviceId} {
+        allow read, write: if isOwner(uid);
+      }
+
+      // Notifications (used by EmergencyContactSettingsDialog batch write)
+      // - Owner can read/write all
+      // - Linked emergency contacts can CREATE and READ (e.g., “contact_updated”)
+      // - Only owner can update/delete
+      match /notifications/{noteId} {
+        allow read: if isOwner(uid) || isEmergencyContactFor(uid);
+        allow create: if isOwner(uid) || isEmergencyContactFor(uid);
+        allow update, delete: if isOwner(uid);
+      }
+
+      //* ---------- EC → MU inbox (history): users/{uid}/contactVoiceMessages/{msgId} ---------- */
+      match /contactVoiceMessages/{msgId} {
+        // Main user can read their own inbox
+        allow get, list: if isOwner(uid);
+
+        // Emergency contact can create a message to this main user's inbox
+        // if the payload clearly shows who it's from and who it's to.
+        allow create: if authed()
+                      && request.resource.data.fromEmergencyContactUid == request.auth.uid
+                      && request.resource.data.toUid == uid;
+
+        // Immutable history from the client perspective
+        allow update, delete: if false;
+      }
+    }
+
+    //* ---------- Client-written check-in history ---------- */
+    match /checkins/{checkinId} {
+      // Owner can read their own entries
+      allow read: if authed() && resource.data.userId == request.auth.uid;
+
+      // Allow create if the document’s userId matches the caller
+      allow create: if authed() && request.resource.data.userId == request.auth.uid;
+
+      // No client updates/deletes to history
+      allow update, delete: if false;
+    }
+
+    //* ---------- Server-only collections (Admin/CF only) ---------- */
+    match /invites/{inviteId} { allow read, write: if false; }
+    match /emergencyContacts/{docId} { allow read, write: if false; }
+    match /mail/{docId} { allow read, write: if false; }
   }
 }
