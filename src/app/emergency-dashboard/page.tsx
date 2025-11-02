@@ -362,6 +362,9 @@ export default function EmergencyDashboardPage() {
       setEmergencyContactUid(user.uid);
       setLoading(false);
 
+      // RIGHT BEFORE you build the links query:
+console.log('[EC uid]', auth.currentUser?.uid);
+
       // ---- Listen to **link docs** where emergencyContactUid == current EC
       // NOTE: name matches your DB: subcollection id is "emergency-contact"
       const linksByEmergencyContactUid = query(

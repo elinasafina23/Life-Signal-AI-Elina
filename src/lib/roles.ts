@@ -14,25 +14,24 @@ export type Role = (typeof ROLES)[number];
 
 /**
  * A lookup table that maps many human/URL variants to a canonical role.
- * This lets us accept inputs like "main-user", "user", "caregiver", etc.
+ * Keys here must be in the same normalized form produced by normalizeRole():
+ * - lowercased
+ * - trimmed
+ * - spaces/dashes -> underscores
+ * - camelCase split to snake_case
  */
 const alias: Record<string, Role> = {
   // Main user
   main_user: 'main_user',
-  'main-user': 'main_user',
-  'main user': 'main_user',
   user: 'main_user',
-  mainUser: 'main_user',
 
   // Emergency contact
-  // ✅ **FIX:** Added 'emergency_contact' to the alias table.
-  // The normalizeRole function converts hyphens to underscores, so this key is required.
   emergency_contact: 'emergency-contact',
-  'emergency-contact': 'emergency-contact',
-  'emergency contact': 'emergency-contact',
+  'emergency-contact': 'emergency-contact', // included in case a pre-normalized value is passed
   caregiver: 'emergency-contact',
   carer: 'emergency-contact',
   contact: 'emergency-contact',
+  ec: 'emergency-contact',
 };
 
 /**
@@ -40,15 +39,21 @@ const alias: Record<string, Role> = {
  * - Returns 'main_user' | 'emergency-contact' for known inputs
  * - Returns null for unknown/empty inputs
  *
- * We:
- *  1) lowercase the input,
- *  2) trim whitespace,
- *  3) convert spaces/dashes to underscores,
- *  4) look it up in the alias table.
+ * Steps:
+ *  1) insert underscores between camelCase boundaries
+ *  2) lowercase
+ *  3) trim
+ *  4) convert spaces/dashes to underscores
  */
 export function normalizeRole(input?: string | null): Role | null {
   if (!input) return null;
-  const key = input.toLowerCase().trim().replace(/[\s-]+/g, '_');
+
+  // 1) split camelCase: "mainUser" -> "main_User"
+  const camelSplit = input.replace(/([a-z])([A-Z])/g, '$1_$2');
+
+  // 2..4) lower, trim, spaces/dashes -> underscores
+  const key = camelSplit.toLowerCase().trim().replace(/[\s-]+/g, '_');
+
   return alias[key] ?? null;
 }
 
