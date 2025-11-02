@@ -22,7 +22,7 @@ function normalizeEmail(e?: string | null) {
 }
 
 /**
- * Ensure the caller is signed in AND has an emergency-contact role.
+ * Ensure the caller is signed in AND has an emergency_contact role.
  * Returns their uid (→ emergencyContactUid) and normalized email.
  */
 async function requireEmergencyContact(req: NextRequest) {

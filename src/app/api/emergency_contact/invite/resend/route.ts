@@ -95,7 +95,7 @@ function makeTokenPair() {
 
 /** Build the accept URL sent to the recipient */
 function makeAcceptUrl(origin: string, token: string) {
-  const url = new URL("/emergency-contact/accept", origin);
+  const url = new URL("/emergency_contact/accept", origin);
   url.searchParams.set("token", token);
   return url.toString();
 }
