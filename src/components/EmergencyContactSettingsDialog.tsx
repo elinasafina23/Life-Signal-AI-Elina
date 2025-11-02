@@ -180,7 +180,7 @@ export function EmergencyContactSettingsDialog({
     (async () => {
       try {
         const q = query(
-          collectionGroup(db, "emergency_contact"),
+          collectionGroup(db, "emergency-contact"),
           where("emergencyContactUid", "==", emergencyContactUid)
         );
         const cg = await getDocs(q);
@@ -355,7 +355,7 @@ export function EmergencyContactSettingsDialog({
       if (!serverSynced) {
         try {
           const qLinks = query(
-            collectionGroup(db, "emergency_contact"),
+            collectionGroup(db, "emergency-contact"),
             where("emergencyContactUid", "==", emergencyContactUid)
           );
           const linkSnap = await getDocs(qLinks);
@@ -365,7 +365,7 @@ export function EmergencyContactSettingsDialog({
 
           // Update every link doc + embedded summary on the main user
           for (const d of linkSnap.docs) {
-            const ref = d.ref; // users/{mainUserUid}/emergency_contact/{docId}
+            const ref = d.ref; // users/{mainUserUid}/emergency-contact/{docId}
             const parent = ref.parent.parent; // users/{mainUserUid}
             const mainUserUid = parent?.id;
 

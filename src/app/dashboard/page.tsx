@@ -515,7 +515,7 @@ export default function DashboardPage() {
     let cancelled = false;
     (async () => {
       try {
-        const snap = await getDocs(collection(db, `users/${mainUserUid}/emergency_contact`));
+        const snap = await getDocs(collection(db, `users/${mainUserUid}/emergency-contact`));
         if (cancelled) return;
 
         let resolvedPrimaryUid = primaryEmergencyContactUid || "";

@@ -58,7 +58,7 @@ async function requireEmergencyContact(req: NextRequest) {
  * - inviteId?: string    // invite doc id
  *
  * Effects:
- * - Upserts link doc at: users/{mainUserUid}/emergency_contact/{emergencyContactUid}
+ * - Upserts link doc at: users/{mainUserUid}/emergency-contact/{emergencyContactUid}
  * - Marks invite accepted
  * - Upserts a top-level summary doc (optional analytics): emergencyContacts/{mainUserUid_email}
  */
@@ -145,7 +145,7 @@ export async function POST(req: NextRequest) {
 
     // --- Prepare references we will write ---
     // Link doc lives under the main user's doc; id = emergencyContactUid (simple & unique)
-    const linkRef = db.doc(`users/${mainUserUid}/emergency_contact/${emergencyContactUid}`);
+    const linkRef = db.doc(`users/${mainUserUid}/emergency-contact/${emergencyContactUid}`);
 
     // Optional top-level join/analytics doc (handy for admin/queries)
     const emergencyContactId = `${mainUserUid}_${invitedEmail}`;

@@ -35,7 +35,7 @@ function sanitizePhone(raw?: string | null) {
  * Auth: must be the same authenticated user as emergencyContactUid
  *
  * What it updates:
- *  - Any subcollection doc in collectionGroup("emergency_contact") where emergencyContactUid matches
+ *  - Any subcollection doc in collectionGroup("emergency-contact") where emergencyContactUid matches
  *  - Any top-level doc in collection("emergencyContacts") where emergencyContactUid matches
  *  - (NEW) Embedded summary fields on each affected main user document (contact1_* and contact2_*) if emails match
  */
@@ -98,9 +98,9 @@ export async function POST(req: NextRequest) {
 
     // ---- Query both locations that may store the contact ----
 
-    // A) Link docs under various main users (subcollections named "emergency_contact")
+    // A) Link docs under various main users (subcollections named "emergency-contact")
     const linkSnap = await db
-      .collectionGroup("emergency_contact")
+      .collectionGroup("emergency-contact")
       .where("emergencyContactUid", "==", emergencyContactUid)
       .get();
 

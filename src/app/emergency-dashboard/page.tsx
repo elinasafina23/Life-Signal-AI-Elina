@@ -370,9 +370,9 @@ export default function EmergencyDashboardPage() {
       setEmergencyContactUid(user.uid);
       setLoading(false);
 
-      // users/{mainUserUid}/emergency_contact/{linkDoc} where emergencyContactUid == current user.uid
+      // users/{mainUserUid}/emergency-contact/{linkDoc} where emergencyContactUid == current user.uid
       const linksByEmergencyContactUid = query(
-        collectionGroup(db, "emergency_contact"),
+        collectionGroup(db, "emergency-contact"),
         where("emergencyContactUid", "==", user.uid),
       );
 
@@ -390,7 +390,7 @@ export default function EmergencyDashboardPage() {
             const liveLinkKeys = new Set<string>();
 
             linksSnap.forEach((linkDoc) => {
-              // users/{MAIN_UID}/emergency_contact/{...}
+              // users/{MAIN_UID}/emergency-contact/{...}
               const mainUserUid = linkDoc.ref.parent.parent?.id;
               if (!mainUserUid) return;
 

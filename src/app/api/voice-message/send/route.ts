@@ -129,7 +129,7 @@ async function sendPushToOne(
 // (13) Check that an EC is actively linked to a main user.
 async function verifyLink(mainUserUid: string, emergencyContactUid: string): Promise<boolean> {
   const snap = await db
-    .collection(`users/${mainUserUid}/emergency_contact`)
+    .collection(`users/${mainUserUid}/emergency-contact`)
     .where("emergencyContactUid", "==", emergencyContactUid)
     .where("status", "==", "ACTIVE")
     .limit(1)
@@ -207,7 +207,7 @@ export async function POST(req: NextRequest) {
       // (24) Load both mirrors of EC links (top-level + subcollection)
       const [topSnap, subSnap] = await Promise.all([
         db.collection("emergencyContacts").where("mainUserUid", "==", mainUserUid).get(),
-        db.collection(`users/${mainUserUid}/emergency_contact`).get(),
+        db.collection(`users/${mainUserUid}/emergency-contact`).get(),
       ]);
 
       // (25) Helper: pull all potential keys from a doc

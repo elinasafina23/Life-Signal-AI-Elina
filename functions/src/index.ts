@@ -86,9 +86,9 @@ export const syncEmergencyContactProfile = onDocumentWritten(
     const oldEmail = String(before.email || newEmail);
     const nowTs = FieldValue.serverTimestamp();
 
-    // 1) Update all /users/{mainUserUid}/emergency_contact/* links for this EC
+    // 1) Update all /users/{mainUserUid}/emergency-contact/* links for this EC
     const linksSnap = await db
-      .collectionGroup("emergency_contact")
+      .collectionGroup("emergency-contact")
       .where("emergencyContactUid", "==", emergencyContactUid)
       .get();
 
@@ -214,7 +214,7 @@ function toMillis(ts?: any): number {
 /** ACTIVE ECs sorted by sentCountInWindow -> lastNotifiedAt -> createdAt */
 async function getActiveEmergencyContacts(mainUserUid: string) {
   const snap = await db
-    .collection(`users/${mainUserUid}/emergency_contact`)
+    .collection(`users/${mainUserUid}/emergency-contact`)
     .where("status", "==", "ACTIVE")
     .get();
 
@@ -249,7 +249,7 @@ async function getActiveEmergencyContacts(mainUserUid: string) {
 /** Collect ACTIVE EC UIDs for push targeting */
 async function getActiveEmergencyContactUids(mainUserUid: string): Promise<string[]> {
   const snap = await db
-    .collection(`users/${mainUserUid}/emergency_contact`)
+    .collection(`users/${mainUserUid}/emergency-contact`)
     .where("status", "==", "ACTIVE")
     .get();
 
@@ -512,7 +512,7 @@ async function runEscalationScanJob(input: { cooldownMin?: number } = {}) {
 
     // If we used a subcollection doc, bump its counters (best-effort)
     if (ecDocId) {
-      const ecRef = db.doc(`users/${mainUserUid}/emergency_contact/${ecDocId}`);
+      const ecRef = db.doc(`users/${mainUserUid}/emergency-contact/${ecDocId}`);
       await ecRef.set(
         {
           lastNotifiedAt: FieldValue.serverTimestamp(),
