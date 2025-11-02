@@ -16,6 +16,7 @@ import {
   doc,
   getDoc,
   Timestamp,
+  documentId,
   type Unsubscribe,
   type Query as FsQuery,
   type QuerySnapshot,
@@ -371,10 +372,10 @@ export default function EmergencyDashboardPage() {
       setEmergencyContactUid(user.uid);
       setLoading(false);
 
-      // users/{mainUserUid}/emergency_contact/{linkDoc} where emergencyContactUid == current user.uid
+      // users/{mainUserUid}/emergency_contact/{linkDoc} where doc id == current user uid
       const linksByEmergencyContactUid = query(
         collectionGroup(db, "emergency_contact"),
-        where("emergencyContactUid", "==", user.uid),
+        where(documentId(), "==", user.uid),
       );
 
       function wireLinksListener(q: FsQuery<DocumentData>, key: string) {
