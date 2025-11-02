@@ -75,6 +75,7 @@ export default function AcceptInvitePage() {
         const res = await fetch("/api/emergency_contact/accept", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
+          credentials: "include", // ensure the __session cookie is sent for authentication
           // server route accepts either token or inviteId; we send both if present
           body: JSON.stringify({ token, inviteId }),
         });

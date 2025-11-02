@@ -317,7 +317,14 @@ export default function EmergencyDashboardPage() {
 
   // NEW: keep per-link data (the per-contact lastVoiceMessage)
   const linkStateRef = useRef<
-    Record<string, { lastVoiceMessage?: any | null }>
+    Record<
+      string,
+      {
+        lastVoiceMessage?: any | null;
+        mainUserName?: string | null;
+        mainUserAvatar?: string | null;
+      }
+    >
   >({});
 
   useEffect(() => {
@@ -387,6 +394,23 @@ export default function EmergencyDashboardPage() {
               const mainUserUid = linkDoc.ref.parent.parent?.id;
               if (!mainUserUid) return;
 
+              const linkData = linkDoc.data() as any;
+              const linkName =
+                typeof linkData?.mainUserName === "string"
+                  ? linkData.mainUserName.trim()
+                  : "";
+              const linkAvatar =
+                typeof linkData?.mainUserAvatar === "string"
+                  ? linkData.mainUserAvatar.trim()
+                  : "";
+
+              const existingLinkState = linkStateRef.current[mainUserUid] ?? {};
+              linkStateRef.current[mainUserUid] = {
+                ...existingLinkState,
+                mainUserName: linkName || existingLinkState.mainUserName || null,
+                mainUserAvatar: linkAvatar || existingLinkState.mainUserAvatar || null,
+              };
+
               nextMainUserIds.add(mainUserUid);
 
               // set up a per-link listener so we can read lastVoiceMessage
@@ -398,15 +422,52 @@ export default function EmergencyDashboardPage() {
                   const d = s.data() as any;
                   linkStateRef.current[mainUserUid] = {
                     lastVoiceMessage: d?.lastVoiceMessage ?? null,
+                    mainUserName:
+                      typeof d?.mainUserName === "string"
+                        ? d.mainUserName.trim() || null
+                        : linkName || null,
+                    mainUserAvatar:
+                      typeof d?.mainUserAvatar === "string"
+                        ? d.mainUserAvatar.trim() || null
+                        : linkAvatar || null,
                   };
                   // trigger refresh of the card that uses this mainUserUid
                   setMainUsers((prev) =>
-                    prev.map((u) =>
-                      u.mainUserUid === mainUserUid ? { ...u } : u,
-                    ),
+                    prev.map((u) => {
+                      if (u.mainUserUid !== mainUserUid) return u;
+                      const state = linkStateRef.current[mainUserUid];
+                      const fallbackName = state?.mainUserName || u.name;
+                      const fallbackAvatar = state?.mainUserAvatar || u.avatar;
+                      return { ...u, name: fallbackName, avatar: fallbackAvatar || undefined };
+                    }),
                   );
                 });
               }
+
+              // If we do not yet have a card for this main user, seed one from the link data
+              setMainUsers((prev) => {
+                if (prev.some((u) => u.mainUserUid === mainUserUid)) return prev;
+
+                const baseName = linkName || "Linked main user";
+                const { initials, colorClass } = initialsAndColor(baseName);
+
+                const seeded: MainUserCard = {
+                  mainUserUid,
+                  name: baseName,
+                  avatar: linkAvatar || undefined,
+                  initials,
+                  colorClass,
+                  status: "Inactive",
+                  lastCheckIn: "—",
+                  location: "",
+                  locationShareReason: null,
+                  locationSharedAt: null,
+                };
+
+                return [...prev, seeded].sort((a, b) =>
+                  a.name.localeCompare(b.name),
+                );
+              });
             });
 
             // remove listeners for unlinked users (user doc listeners)
@@ -445,14 +506,26 @@ export default function EmergencyDashboardPage() {
                   const userData =
                     (userDocSnap.data() as MainUserDoc) || undefined;
 
-                  const name =
-                    `${userData?.firstName || ""} ${
-                      userData?.lastName || ""
-                    }`.trim() || "Main User";
-                  const displayName = `${userData?.firstName || ""} ${
-                    userData?.lastName?.[0] || ""
+                  const linkState = linkStateRef.current[mainUserId];
+                  const linkName =
+                    typeof linkState?.mainUserName === "string"
+                      ? linkState.mainUserName
+                      : null;
+                  const linkAvatar =
+                    typeof linkState?.mainUserAvatar === "string"
+                      ? linkState.mainUserAvatar
+                      : null;
+
+                  const rawFullName = `${userData?.firstName || ""} ${
+                    userData?.lastName || ""
                   }`.trim();
-                  const { initials, colorClass } = initialsAndColor(name);
+                  const resolvedFullName = rawFullName || linkName || "Main User";
+                  const displayName = rawFullName
+                    ? `${userData?.firstName || ""} ${
+                        userData?.lastName?.[0] || ""
+                      }`.trim()
+                    : linkName || resolvedFullName;
+                  const { initials, colorClass } = initialsAndColor(resolvedFullName);
 
                   const last =
                     userData?.lastCheckinAt instanceof Timestamp
@@ -568,8 +641,12 @@ export default function EmergencyDashboardPage() {
 
                   const updatedCard: MainUserCard = {
                     mainUserUid: mainUserId,
-                    name: displayName || name,
-                    avatar: userData?.avatar,
+                    name: displayName || resolvedFullName,
+                    avatar:
+                      (typeof userData?.avatar === "string" &&
+                        userData.avatar.trim()) ||
+                      linkAvatar ||
+                      undefined,
                     initials,
                     colorClass,
                     status,
@@ -596,13 +673,22 @@ export default function EmergencyDashboardPage() {
                     `[Emergency Dashboard] User doc listen failed for ${mainUserId}:`,
                     error,
                   );
-                  const { initials, colorClass } =
-                    initialsAndColor("User Load Error");
+                  const linkState = linkStateRef.current[mainUserId];
+                  const fallbackName =
+                    (typeof linkState?.mainUserName === "string" &&
+                      linkState.mainUserName) ||
+                    "User Load Error";
+                  const fallbackAvatar =
+                    typeof linkState?.mainUserAvatar === "string"
+                      ? linkState.mainUserAvatar
+                      : undefined;
+                  const { initials, colorClass } = initialsAndColor(fallbackName);
                   setMainUsers((prev) => {
                     const map = new Map(prev.map((u) => [u.mainUserUid, u]));
                     map.set(mainUserId, {
                       mainUserUid: mainUserId,
-                      name: "User Load Error",
+                      name: fallbackName,
+                      avatar: fallbackAvatar,
                       initials,
                       colorClass,
                       status: "Inactive",
