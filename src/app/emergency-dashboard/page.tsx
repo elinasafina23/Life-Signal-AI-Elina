@@ -371,9 +371,9 @@ export default function EmergencyDashboardPage() {
       setEmergencyContactUid(user.uid);
       setLoading(false);
 
-      // users/{mainUserUid}/emergency-contact/{linkDoc} where emergencyContactUid == current user.uid
+      // users/{mainUserUid}/emergency_contact/{linkDoc} where emergencyContactUid == current user.uid
       const linksByEmergencyContactUid = query(
-        collectionGroup(db, "emergency-contact"),
+        collectionGroup(db, "emergency_contact"),
         where("emergencyContactUid", "==", user.uid),
       );
 
