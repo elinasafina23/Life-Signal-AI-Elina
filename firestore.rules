@@ -11,9 +11,32 @@ service cloud.firestore {
 
     // Take requesterId as a parameter so it can be used in $(...)
     function hasActiveEmergencyLink(mainUserId, requesterId) {
-      return isSignedIn() &&
-        exists(/databases/$(database)/documents/users/$(mainUserId)/emergency_contact/$(requesterId)) &&
-        get(/databases/$(database)/documents/users/$(mainUserId)/emergency_contact/$(requesterId)).data.status == "ACTIVE";
+      if (!isSignedIn()) {
+        return false;
+      }
+
+      // Primary: link doc stored under the main user's emergency_contact subcollection
+      let linkPath =
+        /databases/$(database)/documents/users/$(mainUserId)/emergency_contact/$(requesterId);
+      if (exists(linkPath)) {
+        let linkDoc = get(linkPath);
+        return linkDoc.data.status == "ACTIVE" &&
+          linkDoc.data.emergencyContactUid == requesterId;
+      }
+
+      // Fallback: mirrored top-level doc keyed by mainUserUid + invite email
+      let requesterEmail = request.auth.token.email;
+      if (requesterEmail != null) {
+        let summaryPath =
+          /databases/$(database)/documents/emergencyContacts/$(mainUserId)_$(requesterEmail);
+        if (exists(summaryPath)) {
+          let summary = get(summaryPath);
+          return summary.data.status == "ACTIVE" &&
+            summary.data.emergencyContactUid == requesterId;
+        }
+      }
+
+      return false;
     }
 
     match /users/{userId} {
