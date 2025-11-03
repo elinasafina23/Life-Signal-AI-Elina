@@ -9,29 +9,24 @@ service cloud.firestore {
       return isSignedIn() && request.auth.uid == userId;
     }
 
-    function currentUid() {
-      return isSignedIn() ? request.auth.uid : "";
-    }
-
-    function emergencyLinkPath(mainUserId, emergencyContactUid) {
-      return /databases/$(database)/documents/users/$(mainUserId)/emergency_contact/$(emergencyContactUid);
-    }
-
-    function hasActiveEmergencyLink(mainUserId, emergencyContactUid) {
-      return (
-        isSignedIn() &&
-        exists(emergencyLinkPath(mainUserId, emergencyContactUid)) &&
-        get(emergencyLinkPath(mainUserId, emergencyContactUid)).data.status == "ACTIVE"
-      );
+    // Take requesterId as a parameter so it can be used in $(...)
+    function hasActiveEmergencyLink(mainUserId, requesterId) {
+      return isSignedIn() &&
+        exists(/databases/$(database)/documents/users/$(mainUserId)/emergency_contact/$(requesterId)) &&
+        get(/databases/$(database)/documents/users/$(mainUserId)/emergency_contact/$(requesterId)).data.status == "ACTIVE";
     }
 
     match /users/{userId} {
-      allow read: if isOwner(userId) || hasActiveEmergencyLink(userId, currentUid());
+      allow read:  if isOwner(userId) || hasActiveEmergencyLink(userId, request.auth.uid);
       allow write: if isOwner(userId);
 
       match /emergency_contact/{linkId} {
         allow read: if isOwner(userId) || (
-          isSignedIn() && linkId == request.auth.uid && hasActiveEmergencyLink(userId, linkId)
+          hasActiveEmergencyLink(userId, request.auth.uid) &&
+          (
+            request.auth.uid == linkId ||
+            resource.data.emergencyContactUid == request.auth.uid
+          )
         );
         allow write: if isOwner(userId);
       }
