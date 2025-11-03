@@ -19,9 +19,9 @@ service cloud.firestore {
       let linkPath =
         /databases/$(database)/documents/users/$(mainUserId)/emergency_contact/$(requesterId);
       if (exists(linkPath)) {
-        let linkDoc = get(linkPath);
-        return linkDoc.data.status == "ACTIVE" &&
-          linkDoc.data.emergencyContactUid == requesterId;
+        let linkDoc = get(linkPath).data;
+        return linkDoc.emergencyContactuid == requesterId &&
+          linkDoc.mainUserUid == mainUserId;
       }
 
       // Fallback: mirrored top-level doc keyed by mainUserUid + invite email
@@ -30,9 +30,9 @@ service cloud.firestore {
         let summaryPath =
           /databases/$(database)/documents/emergencyContacts/$(mainUserId)_$(requesterEmail);
         if (exists(summaryPath)) {
-          let summary = get(summaryPath);
-          return summary.data.status == "ACTIVE" &&
-            summary.data.emergencyContactUid == requesterId;
+          let summary = get(summaryPath).data;
+          return summary.emergencyContactuid == requesterId &&
+            summary.mainUserUid == mainUserId;
         }
       }
 
@@ -48,7 +48,7 @@ service cloud.firestore {
           hasActiveEmergencyLink(userId, request.auth.uid) &&
           (
             request.auth.uid == linkId ||
-            resource.data.emergencyContactUid == request.auth.uid
+            resource.data.emergencyContactuid == request.auth.uid
           )
         );
         allow write: if isOwner(userId);
