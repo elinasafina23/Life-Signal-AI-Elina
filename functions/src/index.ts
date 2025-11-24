@@ -529,6 +529,21 @@ async function runEscalationScanJob(input: { cooldownMin?: number } = {}) {
         `${u.firstName || ""} ${u.lastName || ""}`.trim() :
         "a user";
 
+    // Notify the main user that they missed their check-in (best-effort)
+    try {
+      const mainUserTokens = await getFcmTokensForUser(mainUserUid);
+      await sendPushToTokens(
+        mainUserTokens,
+        {
+          title: "Life Signal: missed check-in",
+          body: "You missed your check-in. Please open the app to confirm you are safe.",
+        },
+        { type: "missed_checkin_main_user", mainUserUid }
+      );
+    } catch (e) {
+      logger.warn("Main user push failed (non-fatal)", (e as any)?.message);
+    }
+
     if (policy.mode === "call_immediately") {
       // (Optional) Push to ECs informing a call is being placed now
       try {
