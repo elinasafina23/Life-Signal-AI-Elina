@@ -125,11 +125,13 @@ interface UserDoc {
   missedNotifiedAt?: Timestamp | null;
   emergencyContacts?: EmergencyContactsData;
   phone?: string;
+  missedCheckinNotifyPreference?: NotifyPreference;
 }
 
 // ---- Local UI types ----
 type Status = "safe" | "missed" | "unknown";
 type LocationShareReason = "sos" | "escalation";
+type NotifyPreference = "push" | "push_sms" | "push_sms_call";
 
 // Voice quick message target
 type VoiceMessageTarget = {
@@ -282,6 +284,10 @@ export default function DashboardPage() {
   const [phoneDraft, setPhoneDraft] = useState<string>("");
   const [phoneSaving, setPhoneSaving] = useState(false);
 
+  // ---- Missed check-in notification preference ----
+  const [notifyPreference, setNotifyPreference] = useState<NotifyPreference>("push");
+  const [notifySaving, setNotifySaving] = useState(false);
+
   // ---- Voice quick message dialog (top of page) ----
   const [voiceMessageTarget, setVoiceMessageTarget] = useState<VoiceMessageTarget | null>(null);
   const [quickVoiceDialogOpen, setQuickVoiceDialogOpen] = useState(false);
@@ -428,6 +434,17 @@ export default function DashboardPage() {
           return prev; // otherwise preserve local edits
         });
         setSavedPhone(storedPhone);
+
+        const preference = data.missedCheckinNotifyPreference;
+        if (
+          preference === "push" ||
+          preference === "push_sms" ||
+          preference === "push_sms_call"
+        ) {
+          setNotifyPreference(preference);
+        } else {
+          setNotifyPreference("push");
+        }
 
         // Emergency contacts block
         const contacts = data.emergencyContacts;
@@ -1163,6 +1180,47 @@ export default function DashboardPage() {
 
   const handlePhoneReset = useCallback(() => setPhoneDraft(savedPhone), [savedPhone]);
 
+  const handleNotifyPreferenceSave = useCallback(async () => {
+    if (!userRef.current)
+      return toast({
+        title: "Not signed in",
+        description: "Please log in again.",
+        variant: "destructive",
+      });
+
+    if (
+      (notifyPreference === "push_sms" || notifyPreference === "push_sms_call") &&
+      !savedPhone
+    ) {
+      return toast({
+        title: "Add your phone number",
+        description: "SMS and calls require a valid mobile number.",
+        variant: "destructive",
+      });
+    }
+
+    setNotifySaving(true);
+    try {
+      await updateDoc(userRef.current, {
+        missedCheckinNotifyPreference: notifyPreference,
+        updatedAt: serverTimestamp(),
+      });
+
+      toast({
+        title: "Preference saved",
+        description: "We’ll notify you using the selected channels if you miss a check-in.",
+      });
+    } catch (e: any) {
+      toast({
+        title: "Update failed",
+        description: e?.message ?? "Please try again.",
+        variant: "destructive",
+      });
+    } finally {
+      setNotifySaving(false);
+    }
+  }, [notifyPreference, savedPhone, toast]);
+
   // ---- NEW: Open/Close contact dialog + fetch latest voice from contact ----
   const openContactDialog = useCallback(
     async (kind: ContactKind) => {
@@ -1716,6 +1774,48 @@ export default function DashboardPage() {
                         Cancel
                       </Button>
                     </div>
+                  </section>
+
+                  <Separator />
+
+                  {/* Missed check-in notifications */}
+                  <section className="space-y-3">
+                    <div>
+                      <h3 className="text-lg font-semibold">Remind me if I miss a check-in</h3>
+                      <p className="text-sm text-muted-foreground">
+                        Select how we notify you before escalating to contacts.
+                      </p>
+                    </div>
+
+                    <Select
+                      value={notifyPreference}
+                      onValueChange={(v) => setNotifyPreference(v as NotifyPreference)}
+                    >
+                      <SelectTrigger className="w-full text-lg">
+                        <SelectValue placeholder="Choose notification preference" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="push">Option A: Push only</SelectItem>
+                        <SelectItem value="push_sms">Option B: Push + SMS</SelectItem>
+                        <SelectItem value="push_sms_call">Option C: Push + SMS + Call</SelectItem>
+                      </SelectContent>
+                    </Select>
+
+                    <div className="flex flex-col gap-2 sm:flex-row">
+                      <Button
+                        type="button"
+                        onMouseDown={(e) => e.preventDefault()}
+                        onClick={handleNotifyPreferenceSave}
+                        disabled={notifySaving}
+                        className="sm:flex-1"
+                      >
+                        {notifySaving ? "Saving…" : "Save preference"}
+                      </Button>
+                    </div>
+
+                    <p className="text-sm text-muted-foreground">
+                      Push alerts are always sent. SMS and calls use the mobile number you saved above.
+                    </p>
                   </section>
 
                   <Separator />

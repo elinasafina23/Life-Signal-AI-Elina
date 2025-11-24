@@ -38,9 +38,37 @@ function getTelnyx() {
 
 const TELNYX_API = "https://api.telnyx.com/v2";
 
+type MissedCheckinNotifyPreference = "push" | "push_sms" | "push_sms_call";
+
+function normalizeMissedCheckinNotifyPreference(v: any): MissedCheckinNotifyPreference {
+  return v === "push_sms" || v === "push_sms_call" ? v : "push";
+}
+
 /** Telnyx-friendly E.164: + and 7–14 more digits (8–15 total) */
 function isE164(v?: string): v is string {
   return typeof v === "string" && /^\+[1-9]\d{7,14}$/.test(v.trim());
+}
+
+async function sendSms(to: string, message: string) {
+  const { apiKey, from } = getTelnyx();
+  if (!apiKey) throw new Error("TELNYX_API_KEY is not set");
+  if (!from || !isE164(String(from))) throw new Error("TELNYX_FROM_NUMBER must be E.164");
+  if (!isE164(to)) throw new Error("SMS destination must be E.164");
+
+  await axios.post(
+    `${TELNYX_API}/messages`,
+    {
+      from,
+      to,
+      text: message,
+    },
+    {
+      headers: {
+        "Authorization": `Bearer ${apiKey}`,
+        "Content-Type": "application/json",
+      },
+    }
+  );
 }
 
 /** Batch helper to avoid the 500-writes limit. */
@@ -473,6 +501,11 @@ async function runEscalationScanJob(input: { cooldownMin?: number } = {}) {
     const mainUserUid = doc.id;
     const u: any = doc.data() || {};
 
+    const notifyPreference = normalizeMissedCheckinNotifyPreference(
+      u.missedCheckinNotifyPreference
+    );
+    const mainUserPhone = typeof u.phone === "string" ? String(u.phone) : null;
+
     // Overdue?
     const lastCheckinAtMs =
       (u.lastCheckinAt?.toDate?.()?.getTime?.() as number | undefined) ?? 0;
@@ -542,6 +575,53 @@ async function runEscalationScanJob(input: { cooldownMin?: number } = {}) {
       );
     } catch (e) {
       logger.warn("Main user push failed (non-fatal)", (e as any)?.message);
+    }
+
+    if (notifyPreference === "push_sms" || notifyPreference === "push_sms_call") {
+      if (!mainUserPhone || !isE164(mainUserPhone)) {
+        logger.warn("Main user SMS skipped: invalid phone", { mainUserUid, mainUserPhone });
+      } else {
+        try {
+          await sendSms(
+            mainUserPhone,
+            `${mainUserName} missed a check-in. Open Life Signal to confirm you are safe.`,
+          );
+        } catch (e) {
+          logger.warn("Main user SMS failed (non-fatal)", (e as any)?.message);
+        }
+      }
+    }
+
+    if (notifyPreference === "push_sms_call") {
+      if (!mainUserPhone || !isE164(mainUserPhone)) {
+        logger.warn("Main user call skipped: invalid phone", { mainUserUid, mainUserPhone });
+      } else if (!appId || !apiKey) {
+        logger.warn("Main user call skipped: missing Telnyx config");
+      } else {
+        const clientState = Buffer
+          .from(JSON.stringify({ mainUserUid, reason: "missed_checkin_self" }))
+          .toString("base64");
+
+        try {
+          await axios.post(
+            `${TELNYX_API}/calls`,
+            {
+              connection_id: appId,
+              to: String(mainUserPhone),
+              from,
+              client_state: clientState,
+            },
+            {
+              headers: {
+                "Authorization": `Bearer ${apiKey}`,
+                "Content-Type": "application/json",
+              },
+            }
+          );
+        } catch (e) {
+          logger.warn("Main user call failed (non-fatal)", (e as any)?.message);
+        }
+      }
     }
 
     if (policy.mode === "call_immediately") {
