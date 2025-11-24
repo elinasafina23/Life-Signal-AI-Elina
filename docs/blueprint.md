@@ -10,6 +10,12 @@
 - Record Voice Check-in: Allow the user to record an 'I'm OK' message and store it.
 - AI Voice Check-in Assessment: A tool that uses voice recognition and an LLM to evaluate the transcribed user speech and compare it to previously stored voice messages in order to verify user's condition based on behavioral biometrics such as speech rate, cadence, and typical phrases.
 
+## Check-in notification cadence
+
+- The scheduled escalation job runs every 5 minutes to look for overdue check-ins and start the notification workflow.
+- A check-in is considered overdue when the time since `lastCheckinAt` exceeds the user's configured `checkinInterval` (default 60 minutes).
+- Once a missed check-in notification goes out, the system waits at least 10 minutes before sending any further missed-check-in push notifications for that user, preventing rapid repeats.
+
 ## Style Guidelines:
 
 - Primary color: Soft blue (#64B5F6) for a calm and reassuring feel.
